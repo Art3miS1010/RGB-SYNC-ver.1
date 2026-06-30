@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V6.9</title>
+    <title>扯鈴 RGB 燈光編排工作站 V.6.10</title>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
@@ -51,8 +51,9 @@
         /* 漸層產生器 */
         .fx-zone { background: #2d3436; padding: 15px; border-radius: 8px; margin-top: 15px; border: 1px solid #00adb5; }
         .fx-inputs { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin-top: 10px; }
-        .fx-inputs label { font-size: 13px; color: #ccc; }
-        .fx-inputs input { background: #121212; color: white; border: 1px solid #555; padding: 5px; border-radius: 4px; width: 75px; text-align: center; }
+        .fx-inputs > div { flex: 1; min-width: 80px; }
+        .fx-inputs label { font-size: 12px; color: #ccc; font-weight: bold; }
+        .fx-inputs input { background: #121212; color: white; border: 1px solid #555; padding: 5px; border-radius: 4px; width: 100%; box-sizing: border-box; text-align: center; }
 
         /* 存盤區 */
         .save-zone { background: #2d3436; padding: 15px; border-radius: 8px; margin-top: 15px; text-align: center; border: 1px dashed #6c5ce7; }
@@ -69,7 +70,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V6.9 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V7.0 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -112,27 +113,35 @@
     </div>
 
     <div class="fx-zone">
-        <h3>✨ RGB 區間色彩漸層產生器</h3>
+        <h3>✨ RGB 區間色彩與亮度漸層產生器</h3>
         <div class="fx-inputs">
             <div>
-                <label>開始(秒):</label><br>
+                <label>開始(秒):</label>
                 <input type="number" id="fxStart" step="0.1" value="5.0">
             </div>
             <div>
-                <label>結束(秒):</label><br>
+                <label>結束(秒):</label>
                 <input type="number" id="fxEnd" step="0.1" value="10.0">
             </div>
             <div>
-                <label>起點 HEX:</label><br>
-                <input type="text" id="colorStart" value="#FF0000" style="width:70px;">
+                <label>起點 HEX:</label>
+                <input type="text" id="colorStart" value="#FF0000">
             </div>
             <div>
-                <label>終點 HEX:</label><br>
-                <input type="text" id="colorEnd" value="#0000FF" style="width:70px;">
+                <label>起點亮度%:</label>
+                <input type="number" id="brightStart" min="0" max="100" value="0">
+            </div>
+            <div>
+                <label>終點 HEX:</label>
+                <input type="text" id="colorEnd" value="#FF0000">
+            </div>
+            <div>
+                <label>終點亮度%:</label>
+                <input type="number" id="brightEnd" min="0" max="100" value="100">
             </div>
         </div>
-        <div style="text-align: center; margin-top: 12px;">
-            <button id="generateFxBtn" style="background: #00adb5; font-weight: bold; padding: 6px 20px;">⚡ 產生並填滿全彩漸層點</button>
+        <div style="text-align: center; margin-top: 15px;">
+            <button id="generateFxBtn" style="background: #00adb5; font-weight: bold; padding: 8px 20px;">⚡ 產生並填滿漸層數據點</button>
         </div>
     </div>
 
@@ -208,6 +217,8 @@ const fxStartInput = document.getElementById('fxStart');
 const fxEndInput = document.getElementById('fxEnd');
 const colorStartInput = document.getElementById('colorStart');
 const colorEndInput = document.getElementById('colorEnd');
+const brightStartInput = document.getElementById('brightStart');
+const brightEndInput = document.getElementById('brightEnd');
 const generateFxBtn = document.getElementById('generateFxBtn');
 
 let isUserDraggingSlider = false;
@@ -260,10 +271,9 @@ function getCalculatedRGB(colorRgb) {
     };
 }
 
-// 💡 核心優化：將當前色彩強度調至最大值（保留比例關係）
 function getMaximizedRGB(colorRgb) {
     const maxVal = Math.max(colorRgb.r, colorRgb.g, colorRgb.b);
-    if (maxVal === 0) return { r: 255, g: 255, b: 255 }; // 避免除以 0
+    if (maxVal === 0) return { r: 255, g: 255, b: 255 };
     const ratio = 255 / maxVal;
     return {
         r: Math.min(255, Math.round(colorRgb.r * ratio)),
@@ -293,7 +303,6 @@ colorPicker.on('input:end', function() {
 });
 
 function processWheelData() {
-    // 如果大按鈕正按住，由大按鈕掌控發送，不讓色盤干擾
     if (isRightBtnActive) return;
 
     const target = getCalculatedRGB(colorPicker.color.rgb);
@@ -377,11 +386,14 @@ window.loadFromSlot = (slotNumber) => {
     }
 };
 
+// 💡 升級版：支援同時內插色彩與亮度的漸層產生器
 generateFxBtn.addEventListener('click', () => {
     const startT = parseFloat(fxStartInput.value);
     const endT = parseFloat(fxEndInput.value);
     const rgbStart = hexToRgb(colorStartInput.value);
     const rgbEnd = hexToRgb(colorEndInput.value);
+    const bStart = parseFloat(brightStartInput.value) / 100;
+    const bEnd = parseFloat(brightEndInput.value) / 100;
     
     if (startT >= endT) {
         alert("請輸入正確的時間區間！");
@@ -389,20 +401,30 @@ generateFxBtn.addEventListener('click', () => {
     }
     
     let generatedPoints = 0;
-    const step = 0.1; 
+    const step = 0.1; // 每 0.1 秒產生一個數據點
     
     for (let t = startT; t <= endT; t += step) {
         const progress = (t - startT) / (endT - startT);
-        const r = Math.round(rgbStart.r + (rgbEnd.r - rgbStart.r) * progress);
-        const g = Math.round(rgbStart.g + (rgbEnd.g - rgbStart.g) * progress);
-        const b = Math.round(rgbStart.b + (rgbEnd.b - rgbStart.b) * progress);
+        
+        // 1. 計算該時間點的基礎色彩組合 (色相內插)
+        const rBase = rgbStart.r + (rgbEnd.r - rgbStart.r) * progress;
+        const gBase = rgbStart.g + (rgbEnd.g - rgbStart.g) * progress;
+        const bBase = rgbStart.b + (rgbEnd.b - rgbStart.b) * progress;
+        
+        // 2. 計算該時間點的當前亮度比例 (亮度內插)
+        const currentFactor = bStart + (bEnd - bStart) * progress;
+        
+        // 3. 結合基礎色彩與亮度，算出最終要輸出的實際 RGB 值
+        const r = Math.round(rBase * currentFactor);
+        const g = Math.round(gBase * currentFactor);
+        const b = Math.round(bBase * currentFactor);
         
         lightScript.push({ time: t, r: r, g: g, b: b, executed: false });
         generatedPoints++;
     }
     
     renderScript();
-    log(`✨ 全彩漸層生成成功！[${colorStartInput.value}] ➡️ [${colorEndInput.value}]，共生成 ${generatedPoints} 點`);
+    log(`✨ 全彩+亮度漸層生成成功！[${colorStartInput.value}, 亮度 ${brightStartInput.value}%] ➡️ [${colorEndInput.value}, 亮度 ${brightEndInput.value}%]，共生成 ${generatedPoints} 點`);
 });
 
 resetDefaultBtn.addEventListener('click', () => {
@@ -433,14 +455,12 @@ audioFile.addEventListener('change', (e) => {
     }
 });
 
-// 💡 修正後的大按鈕：按下瞬間放大至當前色相最大值
 function handlePressStart(e) {
     e.preventDefault(); 
     isRightBtnActive = true;
     if (isLocked255) cancelLockState();
     
     const currentTime = myAudio.currentTime;
-    // 抓取極限增幅色（忽略推桿限制）
     const target = getMaximizedRGB(colorPicker.color.rgb);
 
     executeBluetoothSend(target.r, target.g, target.b);
