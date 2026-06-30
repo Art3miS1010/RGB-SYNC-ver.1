@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V6.4</title>
+    <title>扯鈴 RGB 燈光編排工作站 V6.5</title>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
@@ -69,7 +69,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V6.4 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V6.5 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -213,7 +213,7 @@ const generateFxBtn = document.getElementById('generateFxBtn');
 let isUserDraggingSlider = false;
 let isRightBtnActive = false; 
 let isLocked255 = false;      
-let isUserInteractingWithWheel = false; // 新增：用來記錄使用者是否正在轉圓盤
+let isUserInteractingWithWheel = false; 
 
 let lastRecordTime = 0;
 let lastRecordR = -1, lastRecordG = -1, lastRecordB = -1;
@@ -251,11 +251,10 @@ function rgbToHex(r, g, b) {
     return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
 }
 
-// 💡 修正核心：改用官方推薦的 color:input，並且只要這個事件觸發，就代表使用者手動戳了轉盤
+// 💡 手動拉動、戳轉盤事件（即時變色核心）
 colorPicker.on('color:input', function(color) {
     hexLabel.innerText = color.hexString.toUpperCase();
     
-    // 只要有手動輸入，立刻計算並即時發送
     const factor = parseInt(brightnessSlider.value) / 100;
     const targetR = Math.round(color.rgb.r * factor);
     const targetG = Math.round(color.rgb.g * factor);
@@ -264,12 +263,12 @@ colorPicker.on('color:input', function(color) {
     sendRGBThrottled(targetR, targetG, targetB);
 });
 
-// 當顏色因為劇本自動觸發或其他非手動拖曳而改變時，只純更新文字不送出藍牙
+// 當顏色因為自動觸發而改變時
 colorPicker.on('color:change', function(color) {
     hexLabel.innerText = color.hexString.toUpperCase();
 });
 
-// 監聽圓盤的手指/滑鼠按下與放開事件，用來更穩定地進行劇本錄製判定
+// 監聽圓盤的手指/滑鼠按下與放開事件
 colorPicker.on('input:start', function() { isUserInteractingWithWheel = true; });
 colorPicker.on('input:end', function() { isUserInteractingWithWheel = false; });
 
@@ -561,9 +560,9 @@ function updateTimeline() {
         const minutes = Math.floor(currentTime / 60);
         const seconds = Math.floor(currentTime % 60);
         const milliseconds = Math.floor((currentTime % 1) * 100);
-        timeDisplay.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0');}`;
+        // 💡 修正點：移除這裡結尾多餘的分號，恢復 JS 的正常編譯
+        timeDisplay.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
         
-        // 💡 加上 !isUserInteractingWithWheel 條件：轉動圓盤時絕不讓自動劇本覆蓋訊號
         if (!isRightBtnActive && !isUserDraggingSlider && !isLocked255 && !isUserInteractingWithWheel) {
             lightScript.forEach(node => {
                 if (currentTime >= node.time && !node.executed) {
@@ -604,7 +603,6 @@ function sendRGBThrottled(r, g, b) {
     bluetoothThrottleTimeout = setTimeout(() => {
         bluetoothThrottleTimeout = null;
         
-        // 💡 只要處於使用者正在手動點選或拉動狀態，冷卻後皆正常執行補發
         if (isUserInteractingWithWheel || isRightBtnActive || isLocked255 || isUserDraggingSlider) {
             const factor = parseInt(brightnessSlider.value) / 100;
             const currentRgb = colorPicker.color.rgb;
