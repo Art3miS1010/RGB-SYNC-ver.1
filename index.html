@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V6.5</title>
+    <title>扯鈴 RGB 燈光編排工作站 V6.7</title>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
@@ -69,7 +69,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V6.5 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V6.7 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -215,6 +215,9 @@ let isRightBtnActive = false;
 let isLocked255 = false;      
 let isUserInteractingWithWheel = false; 
 
+// 🎯 核心控制：50ms 輪詢計時器
+let wheelPollInterval = null; 
+
 let lastRecordTime = 0;
 let lastRecordR = -1, lastRecordG = -1, lastRecordB = -1;
 
@@ -251,26 +254,66 @@ function rgbToHex(r, g, b) {
     return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
 }
 
-// 💡 手動拉動、戳轉盤事件（即時變色核心）
-colorPicker.on('color:input', function(color) {
-    hexLabel.innerText = color.hexString.toUpperCase();
-    
+function getCalculatedRGB(colorRgb) {
     const factor = parseInt(brightnessSlider.value) / 100;
-    const targetR = Math.round(color.rgb.r * factor);
-    const targetG = Math.round(color.rgb.g * factor);
-    const targetB = Math.round(color.rgb.b * factor);
-    updateSliderText(targetR, targetG, targetB);
-    sendRGBThrottled(targetR, targetG, targetB);
-});
+    return {
+        r: Math.round(colorRgb.r * factor),
+        g: Math.round(colorRgb.g * factor),
+        b: Math.round(colorRgb.b * factor)
+    };
+}
 
-// 當顏色因為自動觸發而改變時
-colorPicker.on('color:change', function(color) {
+// 僅用於更新介面文字與 HEX 標籤
+colorPicker.on(['color:input', 'color:change'], function(color) {
     hexLabel.innerText = color.hexString.toUpperCase();
 });
 
-// 監聽圓盤的手指/滑鼠按下與放開事件
-colorPicker.on('input:start', function() { isUserInteractingWithWheel = true; });
-colorPicker.on('input:end', function() { isUserInteractingWithWheel = false; });
+// 💡 關鍵改動：手指/滑鼠壓下圓盤
+colorPicker.on('input:start', function() { 
+    isUserInteractingWithWheel = true; 
+    
+    // 1. 壓下的瞬間，立刻抓取並執行一次發送與記錄
+    processWheelData();
+
+    // 2. 啟動 50ms 定時輪詢器，手指不放開就每 50ms 抓一次
+    clearInterval(wheelPollInterval);
+    wheelPollInterval = setInterval(() => {
+        processWheelData();
+    }, 50); 
+});
+
+// 💡 關鍵改動：手指/滑鼠放開圓盤
+colorPicker.on('input:end', function() { 
+    isUserInteractingWithWheel = false; 
+    
+    // 立刻殺掉定時器，絕對不再偵測
+    clearInterval(wheelPollInterval);
+    wheelPollInterval = null;
+
+    // 補發最後放開時定格的顏色，確保精準
+    processWheelData();
+});
+
+// 提取出來的資料處理核心（50ms 輪詢器呼叫它）
+function processWheelData() {
+    const target = getCalculatedRGB(colorPicker.color.rgb);
+    updateSliderText(target.r, target.g, target.b);
+    
+    // 即時傳送至藍牙 (此處不再受 40ms 節流干涉，直接由 50ms 輪詢器把關速率)
+    executeBluetoothSend(target.r, target.g, target.b);
+
+    // 如果音樂正在播放，順便把這個點錄進劇本
+    if (!myAudio.paused && !myAudio.ended) {
+        const currentTime = myAudio.currentTime;
+        // 避開完全重複的點
+        if (target.r !== lastRecordR || target.g !== lastRecordG || target.b !== lastRecordB || currentTime - lastRecordTime >= 0.05) {
+            lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
+            lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
+            lastRecordTime = currentTime;
+            renderScript();
+        }
+    }
+}
 
 window.setQuickColor = (hex) => {
     colorPicker.color.hexString = hex; 
@@ -278,12 +321,9 @@ window.setQuickColor = (hex) => {
     log(`🎨 快選色彩：${hex.toUpperCase()}`);
     
     const rgb = hexToRgb(hex);
-    const factor = parseInt(brightnessSlider.value) / 100;
-    const targetR = Math.round(rgb.r * factor);
-    const targetG = Math.round(rgb.g * factor);
-    const targetB = Math.round(rgb.b * factor);
-    updateSliderText(targetR, targetG, targetB);
-    sendRGBThrottled(targetR, targetG, targetB);
+    const target = getCalculatedRGB(rgb);
+    updateSliderText(target.r, target.g, target.b);
+    executeBluetoothSend(target.r, target.g, target.b);
 };
 
 function renderScript() {
@@ -400,22 +440,16 @@ audioFile.addEventListener('change', (e) => {
 function handlePressStart(e) {
     e.preventDefault(); 
     isRightBtnActive = true;
-    
     if (isLocked255) cancelLockState();
     
     const currentTime = myAudio.currentTime;
-    const rgb = colorPicker.color.rgb; 
-    
-    const factor = parseInt(brightnessSlider.value) / 100;
-    const targetR = Math.round(rgb.r * factor);
-    const targetG = Math.round(rgb.g * factor);
-    const targetB = Math.round(rgb.b * factor);
+    const target = getCalculatedRGB(colorPicker.color.rgb);
 
-    sendRGBThrottled(targetR, targetG, targetB);
-    updateSliderText(targetR, targetG, targetB);
+    executeBluetoothSend(target.r, target.g, target.b);
+    updateSliderText(target.r, target.g, target.b);
 
-    lightScript.push({ time: currentTime, r: targetR, g: targetG, b: targetB, executed: false }); 
-    lastRecordR = targetR; lastRecordG = targetG; lastRecordB = targetB;
+    lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false }); 
+    lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
     renderScript();
 }
 
@@ -423,13 +457,11 @@ function handlePressEnd(e) {
     e.preventDefault();
     if (!isRightBtnActive) return; 
     isRightBtnActive = false;
-    
     if (isLocked255) return;
     
     const currentTime = myAudio.currentTime;
-    
     lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
-    sendRGBThrottled(0, 0, 0);
+    executeBluetoothSend(0, 0, 0);
     updateSliderText(0, 0, 0);
     
     lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false }); 
@@ -452,25 +484,20 @@ function handleLockClick(e) {
         lockBtn.innerText = "🔒 已鎖定當前色";
         lockBtn.classList.add('active');
         
-        const rgb = colorPicker.color.rgb;
-        const factor = parseInt(brightnessSlider.value) / 100;
-        const targetR = Math.round(rgb.r * factor);
-        const targetG = Math.round(rgb.g * factor);
-        const targetB = Math.round(rgb.b * factor);
-
-        sendRGBThrottled(targetR, targetG, targetB);
-        updateSliderText(targetR, targetG, targetB);
+        const target = getCalculatedRGB(colorPicker.color.rgb);
+        executeBluetoothSend(target.r, target.g, target.b);
+        updateSliderText(target.r, target.g, target.b);
         
         if (!myAudio.paused && !myAudio.ended) {
-            lightScript.push({ time: currentTime, r: targetR, g: targetG, b: targetB, executed: false });
-            lastRecordR = targetR; lastRecordG = targetG; lastRecordB = targetB;
+            lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
+            lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
             renderScript();
         }
         log(`🔒 鎖定色彩成功！`);
     } else {
         cancelLockState();
         if (!isRightBtnActive) {
-            sendRGBThrottled(0, 0, 0);
+            executeBluetoothSend(0, 0, 0);
             updateSliderText(0, 0, 0);
             if (!myAudio.paused && !myAudio.ended) {
                 lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false });
@@ -503,7 +530,6 @@ brightnessSlider.addEventListener('touchend', () => { isUserDraggingSlider = fal
 brightnessSlider.addEventListener('input', (e) => {
     const factor = parseInt(e.target.value) / 100; 
     const rgb = colorPicker.color.rgb;
-    
     const targetR = Math.round(rgb.r * factor);
     const targetG = Math.round(rgb.g * factor);
     const targetB = Math.round(rgb.b * factor);
@@ -511,16 +537,14 @@ brightnessSlider.addEventListener('input', (e) => {
     updateSliderText(targetR, targetG, targetB);
     
     if (isLocked255 && factor < 1.0) {
-        isLocked255 = false;
-        lockBtn.innerText = "🔓 鎖定當前色";
-        lockBtn.classList.remove('active');
+        cancelLockState();
     }
     
-    sendRGBThrottled(targetR, targetG, targetB);
+    executeBluetoothSend(targetR, targetG, targetB);
     
     if (!myAudio.paused && !myAudio.ended) {
         const currentTime = myAudio.currentTime;
-        if (currentTime - lastRecordTime >= 0.1 || currentTime < lastRecordTime) {
+        if (currentTime - lastRecordTime >= 0.05) {
             if (targetR !== lastRecordR || targetG !== lastRecordG || targetB !== lastRecordB) {
                 lightScript.push({ time: currentTime, r: targetR, g: targetG, b: targetB, executed: false });
                 lastRecordR = targetR; lastRecordG = targetG; lastRecordB = targetB;
@@ -560,7 +584,6 @@ function updateTimeline() {
         const minutes = Math.floor(currentTime / 60);
         const seconds = Math.floor(currentTime % 60);
         const milliseconds = Math.floor((currentTime % 1) * 100);
-        // 💡 修正點：移除這裡結尾多餘的分號，恢復 JS 的正常編譯
         timeDisplay.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
         
         if (!isRightBtnActive && !isUserDraggingSlider && !isLocked255 && !isUserInteractingWithWheel) {
@@ -569,7 +592,7 @@ function updateTimeline() {
                     node.executed = true;
                     log(`🎬 劇本自動觸發：${node.time.toFixed(2)}s -> 亮 RGB(${node.r}, ${node.g}, ${node.b})`);
                     
-                    sendRGBThrottled(node.r, node.g, node.b);
+                    executeBluetoothSend(node.r, node.g, node.b);
                     updateSliderText(node.r, node.g, node.b);
                     
                     const maxVal = Math.max(node.r, node.g, node.b);
@@ -588,37 +611,10 @@ function updateTimeline() {
 }
 myAudio.addEventListener('play', () => { requestAnimationFrame(updateTimeline); });
 
-// 藍牙動態節流與智慧補發
-function sendRGBThrottled(r, g, b) {
-    if (!txCharacteristic) return;
-    if (r === lastSentR && g === lastSentG && b === lastSentB) return;
-    
-    if (bluetoothThrottleTimeout) {
-        lastSentR = r; lastSentG = g; lastSentB = b;
-        return;
-    }
-    
-    executeBluetoothSend(r, g, b);
-    
-    bluetoothThrottleTimeout = setTimeout(() => {
-        bluetoothThrottleTimeout = null;
-        
-        if (isUserInteractingWithWheel || isRightBtnActive || isLocked255 || isUserDraggingSlider) {
-            const factor = parseInt(brightnessSlider.value) / 100;
-            const currentRgb = colorPicker.color.rgb;
-            const currentTargetR = Math.round(currentRgb.r * factor);
-            const currentTargetG = Math.round(currentRgb.g * factor);
-            const currentTargetB = Math.round(currentRgb.b * factor);
-            
-            if (currentTargetR !== r || currentTargetG !== g || currentTargetB !== b) {
-                executeBluetoothSend(currentTargetR, currentTargetG, currentTargetB);
-            }
-        }
-    }, 40); 
-}
-
+// 藍牙底層強發函式（此處移除了以前的防抖擋板，改由 50ms 定時器直接控速發送）
 async function executeBluetoothSend(r, g, b) {
     if (!txCharacteristic) return;
+    if (r === lastSentR && g === lastSentG && b === lastSentB) return;
     try {
         const data = new Uint8Array([r, g, b]);
         await txCharacteristic.writeValue(data);
