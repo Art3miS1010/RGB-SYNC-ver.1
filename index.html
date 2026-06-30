@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V6</title>
+    <title>扯鈴 RGB 燈光編排工作站 V6.1</title>
+    <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
         button { background: #00adb5; color: white; border: none; padding: 10px 20px; font-size: 15px; border-radius: 5px; cursor: pointer; margin: 5px; transition: 0.2s; }
@@ -28,17 +29,16 @@
         #lockBtn.active { background: #00b894; color: white; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
         
         #captureBtn { 
-            flex: 1; background: #ff9f43; font-size: 16px; font-weight: bold; padding: 15px; 
+            flex: 1; background: #ff9f43; color: #121212; font-size: 16px; font-weight: bold; padding: 15px; 
             border-radius: 10px; box-shadow: 0 4px 10px rgba(255,159,67,0.3); touch-action: none; 
         }
-        #captureBtn:active { background: #ee5253; }
+        #captureBtn:active { background: #ee5253; color: white; }
         
-        /* 💡 新增：RGB 顏色選擇區樣式 */
+        /* 💡 圓盤色彩選擇區 */
         .color-zone { background: #353b48; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #718093; text-align: center;}
-        .color-picker-wrapper { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 12px; }
-        .color-picker-wrapper label { font-weight: bold; color: #f5f6fa; }
-        #colorPicker { width: 60px; height: 40px; border: none; border-radius: 4px; cursor: pointer; background: none; }
-        .quick-colors { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+        .color-picker-container { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; margin-bottom: 12px; }
+        #colorPickerWheel { margin: 10px 0; }
+        .quick-colors { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
         .color-dot { width: 35px; height: 35px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; transition: 0.2s; }
         .color-dot:hover { transform: scale(1.15); }
 
@@ -66,7 +66,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V6 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V6.1 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -79,10 +79,9 @@
     <div id="timeDisplay" class="time-display">00:00.00</div>
     
     <div class="color-zone">
-        <div class="color-picker-wrapper">
-            <label>🎯 當前編排調色盤：</label>
-            <input type="color" id="colorPicker" value="#ff0000">
-            <span id="hexLabel" style="font-family: monospace; color: #55efc4;">#FF0000</span>
+        <div class="color-picker-container">
+            <span style="font-weight: bold; color: #f5f6fa;">🎯 圓盤色彩選擇器：<span id="hexLabel" style="font-family: monospace; color: #55efc4;">#FF0000</span></span>
+            <div id="colorPickerWheel"></div>
         </div>
         <div class="quick-colors">
             <div class="color-dot" style="background: #ff0000;" onclick="setQuickColor('#ff0000')"></div>
@@ -176,11 +175,10 @@ const CHARACTERISTIC_UUID = "00002a56-0000-1000-8000-00805f9b34fb";
 let bluetoothDevice = null;
 let txCharacteristic = null;
 
-// 💡 預設劇本升級為 RGB 物件格式
 const DEFAULT_SCRIPT = [
-    { time: 3.0,  r: 255, g: 0,   b: 0,   executed: false }, // 3秒亮紅燈
-    { time: 6.5,  r: 0,   g: 255, b: 0,   executed: false }, // 6.5秒亮綠燈
-    { time: 10.0, r: 0,   g: 0,   b: 255, executed: false }  // 10秒亮藍燈
+    { time: 3.0,  r: 255, g: 0,   b: 0,   executed: false }, 
+    { time: 6.5,  r: 0,   g: 255, b: 0,   executed: false }, 
+    { time: 10.0, r: 0,   g: 0,   b: 255, executed: false }  
 ];
 
 let lightScript = JSON.parse(JSON.stringify(DEFAULT_SCRIPT));
@@ -200,7 +198,6 @@ const clearAllBtn = document.getElementById('clearAllBtn');
 const resetDefaultBtn = document.getElementById('resetDefaultBtn');
 const pointCountSpan = document.getElementById('pointCount');
 
-const colorPicker = document.getElementById('colorPicker');
 const hexLabel = document.getElementById('hexLabel');
 const brightnessSlider = document.getElementById('brightnessSlider');
 const currentBrightnessVal = document.getElementById('currentBrightnessVal');
@@ -216,19 +213,33 @@ let isRightBtnActive = false;
 let isLocked255 = false;      
 
 let lastRecordTime = 0;
-// 💡 用於優化重複點過濾的快取
 let lastRecordR = -1, lastRecordG = -1, lastRecordB = -1;
 
-// 💡 藍牙動態節流 (40ms) 控制快取
 let bluetoothThrottleTimeout = null;
 let lastSentR = -1, lastSentG = -1, lastSentB = -1;
+
+// 💡 實例化圓盤與飽和度滑桿 (iro.js)
+var colorPicker = new iro.ColorPicker("#colorPickerWheel", {
+    width: 200,
+    color: "#ff0000",
+    borderWidth: 2,
+    borderColor: "#fff",
+    layout: [
+        { 
+            component: iro.ui.Wheel, // 頂部大圓盤 (控制色相)
+        },
+        { 
+            component: iro.ui.Slider, // 下方飽和度滑桿
+            options: { sliderType: 'saturation' }
+        }
+    ]
+});
 
 function log(msg) {
     logBox.innerHTML += `[${new Date().toLocaleTimeString()}] ${msg}<br>`;
     logBox.scrollTop = logBox.scrollHeight;
 }
 
-// 十六進位轉 RGB 物件
 function hexToRgb(hex) {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result ? {
@@ -238,28 +249,32 @@ function hexToRgb(hex) {
     } : { r: 0, g: 0, b: 0 };
 }
 
-// RGB 轉成網頁選色器要的 HEX 格式
 function rgbToHex(r, g, b) {
     return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
 }
 
-// 快速選色點擊功能
+// 監聽圓盤顏色變更
+colorPicker.on('color:change', function(color) {
+    hexLabel.innerText = color.hexString.toUpperCase();
+    
+    // 如果此時按鍵正按著或被鎖定，即時變更藍牙顏色
+    if (isRightBtnActive || isLocked255) {
+        const factor = parseInt(brightnessSlider.value) / 100;
+        sendRGBThrottled(Math.round(color.rgb.r * factor), Math.round(color.rgb.g * factor), Math.round(color.rgb.b * factor));
+    }
+});
+
 window.setQuickColor = (hex) => {
-    colorPicker.value = hex;
+    colorPicker.color.hexString = hex; // 同步更新圓盤指標
     hexLabel.innerText = hex.toUpperCase();
     log(`🎨 快選色彩：${hex.toUpperCase()}`);
     
-    // 如果當前有激活手操或鎖定，立刻將新顏色發給 ESP32
     if (isRightBtnActive || isLocked255) {
         const rgb = hexToRgb(hex);
         const factor = parseInt(brightnessSlider.value) / 100;
         sendRGBThrottled(Math.round(rgb.r * factor), Math.round(rgb.g * factor), Math.round(rgb.b * factor));
     }
 };
-
-colorPicker.addEventListener('input', (e) => {
-    hexLabel.innerText = e.target.value.toUpperCase();
-});
 
 function renderScript() {
     scriptListDiv.innerHTML = '';
@@ -274,7 +289,6 @@ function renderScript() {
     lightScript.forEach((node, index) => {
         const item = document.createElement('div');
         item.className = 'script-item';
-        // 💡 顏色左邊色框線提示當前點的色彩
         item.style.borderLeft = `5px solid rgb(${node.r},${node.g},${node.b})`;
         item.innerHTML = `
             <div>
@@ -317,7 +331,6 @@ window.loadFromSlot = (slotNumber) => {
     }
 };
 
-// 💡 升級功能：RGB 獨立通道線性插值漸層產生器
 generateFxBtn.addEventListener('click', () => {
     const startT = parseFloat(fxStartInput.value);
     const endT = parseFloat(fxEndInput.value);
@@ -334,7 +347,6 @@ generateFxBtn.addEventListener('click', () => {
     
     for (let t = startT; t <= endT; t += step) {
         const progress = (t - startT) / (endT - startT);
-        // 三色通道各自進行線性插值計算
         const r = Math.round(rgbStart.r + (rgbEnd.r - rgbStart.r) * progress);
         const g = Math.round(rgbStart.g + (rgbEnd.g - rgbStart.g) * progress);
         const b = Math.round(rgbStart.b + (rgbEnd.b - rgbStart.b) * progress);
@@ -375,7 +387,7 @@ audioFile.addEventListener('change', (e) => {
     }
 });
 
-// 💡 雙鈕右鈕控制（捕捉當前選擇顏色）
+// 💡 修正 1：手操按下處理
 function handlePressStart(e) {
     e.preventDefault(); 
     isRightBtnActive = true;
@@ -383,9 +395,8 @@ function handlePressStart(e) {
     if (isLocked255) cancelLockState();
     
     const currentTime = myAudio.currentTime;
-    const rgb = hexToRgb(colorPicker.value);
+    const rgb = colorPicker.color.rgb; // 直接拿圓盤當前 RGB
     
-    // 根據調光推桿等比例決定輸出亮度
     const factor = parseInt(brightnessSlider.value) / 100;
     const targetR = Math.round(rgb.r * factor);
     const targetG = Math.round(rgb.g * factor);
@@ -399,8 +410,10 @@ function handlePressStart(e) {
     renderScript();
 }
 
+// 💡 修正 2：手操放開處理（完全阻斷隨後可能被自動劇本洗回去的 Bug）
 function handlePressEnd(e) {
     e.preventDefault();
+    if (!isRightBtnActive) return; // 防止重複觸發
     isRightBtnActive = false;
     
     if (isLocked255) {
@@ -409,20 +422,23 @@ function handlePressEnd(e) {
     }
     
     const currentTime = myAudio.currentTime;
+    
+    // 強制洗成 0 並更新快取，防止後續判斷出錯
+    lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
     sendRGBThrottled(0, 0, 0);
     updateSliderText(0, 0, 0);
     
     lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false }); 
-    lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
     renderScript();
+    log("⏹️ 手操釋放：發送全滅(0,0,0)訊號。");
 }
 
 captureBtn.addEventListener('mousedown', handlePressStart);
 captureBtn.addEventListener('mouseup', handlePressEnd);
+captureBtn.addEventListener('mouseleave', handlePressEnd); // 💡 防止滑出按鈕邊界沒觸發放開
 captureBtn.addEventListener('touchstart', handlePressStart);
 captureBtn.addEventListener('touchend', handlePressEnd);
 
-// 💡 雙鈕左鈕控制（鎖定當前顏色）
 function handleLockClick(e) {
     e.preventDefault();
     const currentTime = myAudio.currentTime;
@@ -432,7 +448,7 @@ function handleLockClick(e) {
         lockBtn.innerText = "🔒 已鎖定當前色";
         lockBtn.classList.add('active');
         
-        const rgb = hexToRgb(colorPicker.value);
+        const rgb = colorPicker.color.rgb;
         const factor = parseInt(brightnessSlider.value) / 100;
         const targetR = Math.round(rgb.r * factor);
         const targetG = Math.round(rgb.g * factor);
@@ -446,7 +462,7 @@ function handleLockClick(e) {
             lastRecordR = targetR; lastRecordG = targetG; lastRecordB = targetB;
             renderScript();
         }
-        log(`🔒 鎖定色彩成功！放開右鈕不會熄滅，可使用推桿做色彩淡出。`);
+        log(`🔒 鎖定色彩成功！放開右鈕不會熄滅。`);
     } else {
         cancelLockState();
         if (!isRightBtnActive) {
@@ -475,38 +491,32 @@ function updateSliderText(r, g, b) {
     currentBrightnessVal.innerText = `${r}, ${g}, ${b}`;
 }
 
-// 監聽滑桿觸摸狀態
 brightnessSlider.addEventListener('mousedown', () => { isUserDraggingSlider = true; });
 brightnessSlider.addEventListener('touchstart', () => { isUserDraggingSlider = true; });
 brightnessSlider.addEventListener('mouseup', () => { isUserDraggingSlider = false; });
 brightnessSlider.addEventListener('touchend', () => { isUserDraggingSlider = false; });
 
-// 💡 總亮度調光推桿控制核心
 brightnessSlider.addEventListener('input', (e) => {
-    const factor = parseInt(e.target.value) / 100; // 0.0 ~ 1.0
-    const rgb = hexToRgb(colorPicker.value);
+    const factor = parseInt(e.target.value) / 100; 
+    const rgb = colorPicker.color.rgb;
     
-    // 計算經過推桿比例縮放後的真實 RGB 輸出數值
     const targetR = Math.round(rgb.r * factor);
     const targetG = Math.round(rgb.g * factor);
     const targetB = Math.round(rgb.b * factor);
     
     updateSliderText(targetR, targetG, targetB);
     
-    // 解除滿載鎖定保護
     if (isLocked255 && factor < 1.0) {
         isLocked255 = false;
         lockBtn.innerText = "🔓 鎖定當前色";
         lockBtn.classList.remove('active');
     }
     
-    // 觸發智慧藍牙節流發送
     sendRGBThrottled(targetR, targetG, targetB);
     
     if (!myAudio.paused && !myAudio.ended) {
         const currentTime = myAudio.currentTime;
         if (currentTime - lastRecordTime >= 0.1 || currentTime < lastRecordTime) {
-            // 💡 過濾完全重複點：只有當 R、G、B 任一通道有變時才紀錄！
             if (targetR !== lastRecordR || targetG !== lastRecordG || targetB !== lastRecordB) {
                 lightScript.push({ time: currentTime, r: targetR, g: targetG, b: targetB, executed: false });
                 lastRecordR = targetR; lastRecordG = targetG; lastRecordB = targetB;
@@ -517,7 +527,6 @@ brightnessSlider.addEventListener('input', (e) => {
     }
 });
 
-// 藍牙連線
 connectBtn.addEventListener('click', async () => {
     try {
         log("正在尋找 ESP32-C3 RGB 控制台...");
@@ -540,7 +549,6 @@ function resetScriptStates() {
 myAudio.addEventListener('play', resetScriptStates);
 myAudio.addEventListener('seeked', resetScriptStates);
 
-// 核心播放時間軸監聽
 function updateTimeline() {
     if (!myAudio.paused && !myAudio.ended) {
         const currentTime = myAudio.currentTime;
@@ -550,71 +558,61 @@ function updateTimeline() {
         const milliseconds = Math.floor((currentTime % 1) * 100);
         timeDisplay.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
         
-        lightScript.forEach(node => {
-            if (currentTime >= node.time && !node.executed) {
-                node.executed = true;
-                log(`🎬 劇本自動觸發：${node.time.toFixed(2)}s -> 亮 RGB(${node.r}, ${node.g}, ${node.b})`);
-                
-                sendRGBThrottled(node.r, node.g, node.b);
-                
-                // 自動播放時同步聯動更新網頁 UI 面板外觀
-                if (!isUserDraggingSlider) {
+        // 💡 智慧型防干擾：手操狀態下（按鍵正被按著、或滑桿正被拉著）絕不被劇本自動觸發覆蓋
+        if (!isRightBtnActive && !isUserDraggingSlider) {
+            lightScript.forEach(node => {
+                if (currentTime >= node.time && !node.executed) {
+                    node.executed = true;
+                    log(`🎬 劇本自動觸發：${node.time.toFixed(2)}s -> 亮 RGB(${node.r}, ${node.g}, ${node.b})`);
+                    
+                    sendRGBThrottled(node.r, node.g, node.b);
                     updateSliderText(node.r, node.g, node.b);
-                    // 根據當前最大通道逆推算出推桿與調色盤該呈現的樣子
+                    
                     const maxVal = Math.max(node.r, node.g, node.b);
                     if (maxVal > 0) {
                         brightnessSlider.value = Math.round((maxVal / 255) * 100);
-                        // 嘗試還原基本色彩到 picker 上
                         const scale = 255 / maxVal;
-                        colorPicker.value = rgbToHex(Math.min(255, Math.round(node.r*scale)), Math.min(255, Math.round(node.g*scale)), Math.min(255, Math.round(node.b*scale)));
-                        hexLabel.innerText = colorPicker.value.toUpperCase();
+                        colorPicker.color.hexString = rgbToHex(Math.min(255, Math.round(node.r*scale)), Math.min(255, Math.round(node.g*scale)), Math.min(255, Math.round(node.b*scale)));
+                        hexLabel.innerText = colorPicker.color.hexString.toUpperCase();
                     } else {
                         brightnessSlider.value = 0;
                     }
                 }
-            }
-        });
+            });
+        }
     }
     requestAnimationFrame(updateTimeline);
 }
 myAudio.addEventListener('play', () => { requestAnimationFrame(updateTimeline); });
 
-// 💡 核心優化：RGB 三通道動態智慧藍牙節流發送 (Throttle 40ms)
 function sendRGBThrottled(r, g, b) {
     if (!txCharacteristic) return;
-    
-    // 如果傳送值與上一次完全一致，立刻攔截不發送，極大省下藍牙頻寬
     if (r === lastSentR && g === lastSentG && b === lastSentB) return;
     
-    // 如果在前一次發送的 40ms 冷卻期內，先暫存最新狀態
     if (bluetoothThrottleTimeout) {
         lastSentR = r; lastSentG = g; lastSentB = b;
         return;
     }
     
-    // 冷卻以外的時間，立刻發送 3 位元組包
     executeBluetoothSend(r, g, b);
     
-    // 啟動 40ms 鎖定
     bluetoothThrottleTimeout = setTimeout(() => {
         bluetoothThrottleTimeout = null;
-        // 冷卻結束後，如果這段期間使用者手速過快有產生新色彩，自動補發最新色彩
         const factor = parseInt(brightnessSlider.value) / 100;
-        const currentRgb = hexToRgb(colorPicker.value);
-        const currentTargetR = Math.round(currentRgb.r * factor);
-        const currentTargetG = Math.round(currentRgb.g * factor);
-        const currentTargetB = Math.round(currentRgb.b * factor);
+        const currentRgb = colorPicker.color.rgb;
+        const currentTargetR = isRightBtnActive || isLocked255 ? Math.round(currentRgb.r * factor) : 0;
+        const currentTargetG = isRightBtnActive || isLocked255 ? Math.round(currentRgb.g * factor) : 0;
+        const currentTargetB = isRightBtnActive || isLocked255 ? Math.round(currentRgb.b * factor) : 0;
         
         if (currentTargetR !== r || currentTargetG !== g || currentTargetB !== b) {
             executeBluetoothSend(currentTargetR, currentTargetG, currentTargetB);
         }
-    }, 40); 
+    }, 45); 
 }
 
 async function executeBluetoothSend(r, g, b) {
     if (!txCharacteristic) return;
     try {
-        // 打包成 3 個 Bytes 送給 ESP32-C3
         const data = new Uint8Array([r, g, b]);
         await txCharacteristic.writeValue(data);
         lastSentR = r; lastSentG = g; lastSentB = b;
