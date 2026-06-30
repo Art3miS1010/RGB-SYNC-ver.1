@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V6.7</title>
+    <title>扯鈴 RGB 燈光編排工作站 V6.9</title>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
@@ -69,7 +69,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V6.7 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V6.9 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -99,7 +99,7 @@
     <div class="pad-zone">
         <div class="btn-split-row">
             <button id="lockBtn">🔓 鎖定當前色</button>
-            <button id="captureBtn">按住：亮燈 / 放開：全滅</button>
+            <button id="captureBtn">按住：當前色全亮 / 放開：全滅</button>
         </div>
         
         <div class="slider-container">
@@ -215,13 +215,10 @@ let isRightBtnActive = false;
 let isLocked255 = false;      
 let isUserInteractingWithWheel = false; 
 
-// 🎯 核心控制：50ms 輪詢計時器
 let wheelPollInterval = null; 
 
 let lastRecordTime = 0;
 let lastRecordR = -1, lastRecordG = -1, lastRecordB = -1;
-
-let bluetoothThrottleTimeout = null;
 let lastSentR = -1, lastSentG = -1, lastSentB = -1;
 
 // 初始化色彩圓盤
@@ -263,49 +260,48 @@ function getCalculatedRGB(colorRgb) {
     };
 }
 
-// 僅用於更新介面文字與 HEX 標籤
+// 💡 核心優化：將當前色彩強度調至最大值（保留比例關係）
+function getMaximizedRGB(colorRgb) {
+    const maxVal = Math.max(colorRgb.r, colorRgb.g, colorRgb.b);
+    if (maxVal === 0) return { r: 255, g: 255, b: 255 }; // 避免除以 0
+    const ratio = 255 / maxVal;
+    return {
+        r: Math.min(255, Math.round(colorRgb.r * ratio)),
+        g: Math.min(255, Math.round(colorRgb.g * ratio)),
+        b: Math.min(255, Math.round(colorRgb.b * ratio))
+    };
+}
+
 colorPicker.on(['color:input', 'color:change'], function(color) {
     hexLabel.innerText = color.hexString.toUpperCase();
 });
 
-// 💡 關鍵改動：手指/滑鼠壓下圓盤
 colorPicker.on('input:start', function() { 
     isUserInteractingWithWheel = true; 
-    
-    // 1. 壓下的瞬間，立刻抓取並執行一次發送與記錄
     processWheelData();
-
-    // 2. 啟動 50ms 定時輪詢器，手指不放開就每 50ms 抓一次
     clearInterval(wheelPollInterval);
     wheelPollInterval = setInterval(() => {
         processWheelData();
     }, 50); 
 });
 
-// 💡 關鍵改動：手指/滑鼠放開圓盤
 colorPicker.on('input:end', function() { 
     isUserInteractingWithWheel = false; 
-    
-    // 立刻殺掉定時器，絕對不再偵測
     clearInterval(wheelPollInterval);
     wheelPollInterval = null;
-
-    // 補發最後放開時定格的顏色，確保精準
     processWheelData();
 });
 
-// 提取出來的資料處理核心（50ms 輪詢器呼叫它）
 function processWheelData() {
+    // 如果大按鈕正按住，由大按鈕掌控發送，不讓色盤干擾
+    if (isRightBtnActive) return;
+
     const target = getCalculatedRGB(colorPicker.color.rgb);
     updateSliderText(target.r, target.g, target.b);
-    
-    // 即時傳送至藍牙 (此處不再受 40ms 節流干涉，直接由 50ms 輪詢器把關速率)
     executeBluetoothSend(target.r, target.g, target.b);
 
-    // 如果音樂正在播放，順便把這個點錄進劇本
     if (!myAudio.paused && !myAudio.ended) {
         const currentTime = myAudio.currentTime;
-        // 避開完全重複的點
         if (target.r !== lastRecordR || target.g !== lastRecordG || target.b !== lastRecordB || currentTime - lastRecordTime >= 0.05) {
             lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
             lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
@@ -437,13 +433,15 @@ audioFile.addEventListener('change', (e) => {
     }
 });
 
+// 💡 修正後的大按鈕：按下瞬間放大至當前色相最大值
 function handlePressStart(e) {
     e.preventDefault(); 
     isRightBtnActive = true;
     if (isLocked255) cancelLockState();
     
     const currentTime = myAudio.currentTime;
-    const target = getCalculatedRGB(colorPicker.color.rgb);
+    // 抓取極限增幅色（忽略推桿限制）
+    const target = getMaximizedRGB(colorPicker.color.rgb);
 
     executeBluetoothSend(target.r, target.g, target.b);
     updateSliderText(target.r, target.g, target.b);
@@ -451,6 +449,7 @@ function handlePressStart(e) {
     lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false }); 
     lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
     renderScript();
+    log(`🔥 手操按下：以極限最大值全亮 RGB(${target.r}, ${target.g}, ${target.b})`);
 }
 
 function handlePressEnd(e) {
@@ -611,7 +610,6 @@ function updateTimeline() {
 }
 myAudio.addEventListener('play', () => { requestAnimationFrame(updateTimeline); });
 
-// 藍牙底層強發函式（此處移除了以前的防抖擋板，改由 50ms 定時器直接控速發送）
 async function executeBluetoothSend(r, g, b) {
     if (!txCharacteristic) return;
     if (r === lastSentR && g === lastSentG && b === lastSentB) return;
