@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>扯鈴 RGB 燈光編排工作站 V6</title>
+    <style>
+        body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
+        button { background: #00adb5; color: white; border: none; padding: 10px 20px; font-size: 15px; border-radius: 5px; cursor: pointer; margin: 5px; transition: 0.2s; }
+        button:hover { background: #008c9e; }
+        button.danger { background: #ff4d4d; }
+        button.danger:hover { background: #cc3333; }
+        button.save-slot { background: #6c5ce7; }
+        
+        .container { max-width: 650px; margin: 0 auto; background: #222831; padding: 20px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: left; }
+        h2, h3 { text-align: center; color: #00adb5; margin-block: 10px; }
+        .status { text-align: center; color: #eee; font-size: 14px; margin-bottom: 15px; }
+        .time-display { font-size: 40px; font-weight: bold; color: #222831; background: #eeeeee; padding: 10px; border-radius: 5px; margin: 15px 0; text-align: center; font-family: monospace; }
+        
+        /* 雙鈕區塊 */
+        .pad-zone { text-align: center; margin: 20px 0; background: #2d3436; padding: 15px; border-radius: 8px; }
+        .btn-split-row { display: flex; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
+        
+        #lockBtn { 
+            flex: 1; background: #55efc4; color: #2d3436; font-size: 16px; font-weight: bold; padding: 15px; 
+            border-radius: 10px; box-shadow: 0 4px 10px rgba(85,239,196,0.2); touch-action: none; transition: 0.1s;
+        }
+        #lockBtn.active { background: #00b894; color: white; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
+        
+        #captureBtn { 
+            flex: 1; background: #ff9f43; font-size: 16px; font-weight: bold; padding: 15px; 
+            border-radius: 10px; box-shadow: 0 4px 10px rgba(255,159,67,0.3); touch-action: none; 
+        }
+        #captureBtn:active { background: #ee5253; }
+        
+        /* 💡 新增：RGB 顏色選擇區樣式 */
+        .color-zone { background: #353b48; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #718093; text-align: center;}
+        .color-picker-wrapper { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 12px; }
+        .color-picker-wrapper label { font-weight: bold; color: #f5f6fa; }
+        #colorPicker { width: 60px; height: 40px; border: none; border-radius: 4px; cursor: pointer; background: none; }
+        .quick-colors { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+        .color-dot { width: 35px; height: 35px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; transition: 0.2s; }
+        .color-dot:hover { transform: scale(1.15); }
+
+        /* 滑桿樣式 */
+        .slider-container { margin: 10px auto; width: 95%; text-align: center; }
+        .slider-text-row { display: flex; justify-content: space-between; font-size: 14px; color: #ff9f43; font-weight: bold; margin-bottom: 5px; padding: 0 5px; }
+        .my-slider { -webkit-appearance: none; width: 100%; height: 12px; border-radius: 5px; background: #393e46; outline: none; }
+        .my-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 26px; height: 26px; border-radius: 50%; background: #00adb5; cursor: pointer; }
+
+        /* 特效區段產生器 */
+        .fx-zone { background: #2d3436; padding: 15px; border-radius: 8px; margin-top: 15px; border: 1px solid #00adb5; }
+        .fx-inputs { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin-top: 10px; }
+        .fx-inputs label { font-size: 13px; color: #ccc; }
+        .fx-inputs input { background: #121212; color: white; border: 1px solid #555; padding: 5px; border-radius: 4px; width: 75px; text-align: center; }
+
+        .save-zone { background: #2d3436; padding: 15px; border-radius: 8px; margin-top: 15px; text-align: center; border: 1px dashed #6c5ce7; }
+        .slot-group { display: flex; justify-content: space-around; margin-top: 10px; }
+        .editor-zone { background: #393e46; padding: 15px; border-radius: 5px; margin-top: 20px; }
+        .script-list { max-height: 200px; overflow-y: auto; margin-top: 10px; background: #1a1e24; padding: 10px; border-radius: 5px; }
+        .script-item { display: flex; align-items: center; justify-content: space-between; background: #2a3038; padding: 6px 12px; margin-bottom: 6px; border-radius: 4px; border-left: 4px solid #00adb5; }
+        .script-item input { background: #121212; color: white; border: 1px solid #555; padding: 4px; border-radius: 3px; width: 55px; text-align: center; }
+        .log-box { background: #1a1e24; padding: 10px; border-radius: 5px; height: 100px; overflow-y: auto; font-size: 12px; font-family: monospace; margin-top: 15px; color: #a6b1e1; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>扯鈴 RGB 燈光編排工作站 V6 🎬</h2>
+    <div id="status" class="status">狀態：尚未連接 ESP32</div>
+    <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
+    
+    <hr style="border-color: #393e46; margin: 15px 0;">
+    
+    <h3>1. 即時控制與播放面板</h3>
+    <input type="file" id="audioFile" accept="audio/*" style="margin-bottom: 15px; width: 100%;"><br>
+    <audio id="myAudio" controls style="width: 100%; margin-bottom: 10px;"></audio>
+    
+    <div id="timeDisplay" class="time-display">00:00.00</div>
+    
+    <div class="color-zone">
+        <div class="color-picker-wrapper">
+            <label>🎯 當前編排調色盤：</label>
+            <input type="color" id="colorPicker" value="#ff0000">
+            <span id="hexLabel" style="font-family: monospace; color: #55efc4;">#FF0000</span>
+        </div>
+        <div class="quick-colors">
+            <div class="color-dot" style="background: #ff0000;" onclick="setQuickColor('#ff0000')"></div>
+            <div class="color-dot" style="background: #00ff00;" onclick="setQuickColor('#00ff00')"></div>
+            <div class="color-dot" style="background: #0000ff;" onclick="setQuickColor('#0000ff')"></div>
+            <div class="color-dot" style="background: #ffff00;" onclick="setQuickColor('#ffff00')"></div>
+            <div class="color-dot" style="background: #ff00ff;" onclick="setQuickColor('#ff00ff')"></div>
+            <div class="color-dot" style="background: #ffffff;" onclick="setQuickColor('#ffffff')"></div>
+        </div>
+    </div>
+
+    <div class="pad-zone">
+        <div class="btn-split-row">
+            <button id="lockBtn">🔓 鎖定當前色</button>
+            <button id="captureBtn">按住：亮燈 / 放開：全滅</button>
+        </div>
+        
+        <div class="slider-container">
+            <div class="slider-text-row">
+                <span>🎛️ 總亮度調光推桿 (0-100%)</span>
+                <span style="color:#00adb5;">當前實際 RGB: <span id="currentBrightnessVal">0, 0, 0</span></span>
+            </div>
+            <input type="range" min="0" max="100" value="100" class="my-slider" id="brightnessSlider">
+        </div>
+    </div>
+
+    <div class="fx-zone">
+        <h3>✨ RGB 區間色彩漸層產生器</h3>
+        <div class="fx-inputs">
+            <div>
+                <label>開始(秒):</label><br>
+                <input type="number" id="fxStart" step="0.1" value="5.0">
+            </div>
+            <div>
+                <label>結束(秒):</label><br>
+                <input type="number" id="fxEnd" step="0.1" value="10.0">
+            </div>
+            <div>
+                <label>起點 HEX:</label><br>
+                <input type="text" id="colorStart" value="#FF0000" style="width:70px;">
+            </div>
+            <div>
+                <label>終點 HEX:</label><br>
+                <input type="text" id="colorEnd" value="#0000FF" style="width:70px;">
+            </div>
+        </div>
+        <div style="text-align: center; margin-top: 12px;">
+            <button id="generateFxBtn" style="background: #00adb5; font-weight: bold; padding: 6px 20px;">⚡ 產生並填滿全彩漸層點</button>
+        </div>
+    </div>
+
+    <div class="save-zone">
+        <h3>儲存與讀取編排存檔</h3>
+        <div>目前編輯中的劇本點數: <span id="pointCount" style="color:#ff9f43; font-weight:bold;">0</span> 點</div>
+        <div class="slot-group">
+            <div>
+                <button class="save-slot" onclick="saveToSlot(1)">儲存至 存檔一</button><br>
+                <button style="background:#2ed573;" onclick="loadFromSlot(1)">讀取 存檔一</button>
+            </div>
+            <div>
+                <button class="save-slot" onclick="saveToSlot(2)">儲存至 存檔二</button><br>
+                <button style="background:#2ed573;" onclick="loadFromSlot(2)">讀取 存檔二</button>
+            </div>
+            <div>
+                <button class="save-slot" onclick="saveToSlot(3)">儲存至 存檔三</button><br>
+                <button style="background:#2ed573;" onclick="loadFromSlot(3)">讀取 存檔三</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="editor-zone">
+        <h3>2. 當前燈光劇本清單 (可即時修改)</h3>
+        <div style="display: flex; justify-content: space-between;">
+            <button id="resetDefaultBtn" style="background: #48dbfb; color: #222831; font-weight: bold;">🔄 還原原廠設定</button>
+            <button id="clearAllBtn" class="danger">清空全部點</button>
+        </div>
+        <div id="scriptList" class="script-list"></div>
+        
+        <div style="margin-top: 15px; text-align: center;">
+            <button id="exportBtn" style="background: #6c5ce7;">💾 匯出目前劇本程式碼</button>
+        </div>
+    </div>
+    
+    <div id="logBox" class="log-box"></div>
+</div>
+
+<script>
+const SERVICE_UUID = "0000181c-0000-1000-8000-00805f9b34fb"; 
+const CHARACTERISTIC_UUID = "00002a56-0000-1000-8000-00805f9b34fb";
+
+let bluetoothDevice = null;
+let txCharacteristic = null;
+
+// 💡 預設劇本升級為 RGB 物件格式
+const DEFAULT_SCRIPT = [
+    { time: 3.0,  r: 255, g: 0,   b: 0,   executed: false }, // 3秒亮紅燈
+    { time: 6.5,  r: 0,   g: 255, b: 0,   executed: false }, // 6.5秒亮綠燈
+    { time: 10.0, r: 0,   g: 0,   b: 255, executed: false }  // 10秒亮藍燈
+];
+
+let lightScript = JSON.parse(JSON.stringify(DEFAULT_SCRIPT));
+
+// UI 元件
+const connectBtn = document.getElementById('connectBtn');
+const statusDiv = document.getElementById('status');
+const audioFile = document.getElementById('audioFile');
+const myAudio = document.getElementById('myAudio');
+const timeDisplay = document.getElementById('timeDisplay');
+const logBox = document.getElementById('logBox');
+const scriptListDiv = document.getElementById('scriptList');
+const captureBtn = document.getElementById('captureBtn');
+const lockBtn = document.getElementById('lockBtn');
+const exportBtn = document.getElementById('exportBtn');
+const clearAllBtn = document.getElementById('clearAllBtn');
+const resetDefaultBtn = document.getElementById('resetDefaultBtn');
+const pointCountSpan = document.getElementById('pointCount');
+
+const colorPicker = document.getElementById('colorPicker');
+const hexLabel = document.getElementById('hexLabel');
+const brightnessSlider = document.getElementById('brightnessSlider');
+const currentBrightnessVal = document.getElementById('currentBrightnessVal');
+
+const fxStartInput = document.getElementById('fxStart');
+const fxEndInput = document.getElementById('fxEnd');
+const colorStartInput = document.getElementById('colorStart');
+const colorEndInput = document.getElementById('colorEnd');
+const generateFxBtn = document.getElementById('generateFxBtn');
+
+let isUserDraggingSlider = false;
+let isRightBtnActive = false; 
+let isLocked255 = false;      
+
+let lastRecordTime = 0;
+// 💡 用於優化重複點過濾的快取
+let lastRecordR = -1, lastRecordG = -1, lastRecordB = -1;
+
+// 💡 藍牙動態節流 (40ms) 控制快取
+let bluetoothThrottleTimeout = null;
+let lastSentR = -1, lastSentG = -1, lastSentB = -1;
+
+function log(msg) {
+    logBox.innerHTML += `[${new Date().toLocaleTimeString()}] ${msg}<br>`;
+    logBox.scrollTop = logBox.scrollHeight;
+}
+
+// 十六進位轉 RGB 物件
+function hexToRgb(hex) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+        r: parseInt(result[1], 16),
+        g: parseInt(result[2], 16),
+        b: parseInt(result[3], 16)
+    } : { r: 0, g: 0, b: 0 };
+}
+
+// RGB 轉成網頁選色器要的 HEX 格式
+function rgbToHex(r, g, b) {
+    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+}
+
+// 快速選色點擊功能
+window.setQuickColor = (hex) => {
+    colorPicker.value = hex;
+    hexLabel.innerText = hex.toUpperCase();
+    log(`🎨 快選色彩：${hex.toUpperCase()}`);
+    
+    // 如果當前有激活手操或鎖定，立刻將新顏色發給 ESP32
+    if (isRightBtnActive || isLocked255) {
+        const rgb = hexToRgb(hex);
+        const factor = parseInt(brightnessSlider.value) / 100;
+        sendRGBThrottled(Math.round(rgb.r * factor), Math.round(rgb.g * factor), Math.round(rgb.b * factor));
+    }
+};
+
+colorPicker.addEventListener('input', (e) => {
+    hexLabel.innerText = e.target.value.toUpperCase();
+});
+
+function renderScript() {
+    scriptListDiv.innerHTML = '';
+    lightScript.sort((a, b) => a.time - b.time);
+    pointCountSpan.innerText = lightScript.length;
+    
+    if (lightScript.length === 0) {
+        scriptListDiv.innerHTML = '<div style="color:#aaa; text-align:center; padding:20px;">目前沒有任何燈光點，請長按或滑動滑桿捕捉！</div>';
+        return;
+    }
+    
+    lightScript.forEach((node, index) => {
+        const item = document.createElement('div');
+        item.className = 'script-item';
+        // 💡 顏色左邊色框線提示當前點的色彩
+        item.style.borderLeft = `5px solid rgb(${node.r},${node.g},${node.b})`;
+        item.innerHTML = `
+            <div>
+                <strong>⏱️ 秒:</strong> 
+                <input type="number" step="0.01" value="${node.time.toFixed(2)}" onchange="updateNodeTime(${index}, this.value)">
+                <span style="margin-left:5px;"><strong>R:</strong></span>
+                <input type="number" min="0" max="255" value="${node.r}" onchange="updateNodeRGBChannel(${index}, 'r', this.value)">
+                <span><strong>G:</strong></span>
+                <input type="number" min="0" max="255" value="${node.g}" onchange="updateNodeRGBChannel(${index}, 'g', this.value)">
+                <span><strong>B:</strong></span>
+                <input type="number" min="0" max="255" value="${node.b}" onchange="updateNodeRGBChannel(${index}, 'b', this.value)">
+            </div>
+            <button class="danger" style="padding: 2px 6px; font-size: 11px;" onclick="deleteNode(${index})">刪除</button>
+        `;
+        scriptListDiv.appendChild(item);
+    });
+}
+
+window.updateNodeTime = (index, value) => { lightScript[index].time = parseFloat(value); resetScriptStates(); };
+window.updateNodeRGBChannel = (index, channel, value) => { lightScript[index][channel] = parseInt(value); renderScript(); };
+window.deleteNode = (index) => { lightScript.splice(index, 1); renderScript(); };
+
+window.saveToSlot = (slotNumber) => {
+    localStorage.setItem(`diabolo_rgb_slot_${slotNumber}`, JSON.stringify(lightScript));
+    log(`💾 成功將當前全彩編排儲存至 【存檔 ${slotNumber}】`);
+    alert(`成功儲存至 存檔 ${slotNumber}！`);
+};
+
+window.loadFromSlot = (slotNumber) => {
+    const savedData = localStorage.getItem(`diabolo_rgb_slot_${slotNumber}`);
+    if (savedData) {
+        lightScript = JSON.parse(savedData);
+        resetScriptStates();
+        renderScript();
+        myAudio.currentTime = 0;
+        myAudio.play();
+        log("📥 已成功讀取 RGB 全彩存檔，音樂從頭播放！");
+    } else {
+        alert(`【存檔 ${slotNumber}】是空的喔！`);
+    }
+};
+
+// 💡 升級功能：RGB 獨立通道線性插值漸層產生器
+generateFxBtn.addEventListener('click', () => {
+    const startT = parseFloat(fxStartInput.value);
+    const endT = parseFloat(fxEndInput.value);
+    const rgbStart = hexToRgb(colorStartInput.value);
+    const rgbEnd = hexToRgb(colorEndInput.value);
+    
+    if (startT >= endT) {
+        alert("請輸入正確的時間區間！");
+        return;
+    }
+    
+    let generatedPoints = 0;
+    const step = 0.1; 
+    
+    for (let t = startT; t <= endT; t += step) {
+        const progress = (t - startT) / (endT - startT);
+        // 三色通道各自進行線性插值計算
+        const r = Math.round(rgbStart.r + (rgbEnd.r - rgbStart.r) * progress);
+        const g = Math.round(rgbStart.g + (rgbEnd.g - rgbStart.g) * progress);
+        const b = Math.round(rgbStart.b + (rgbEnd.b - rgbStart.b) * progress);
+        
+        lightScript.push({ time: t, r: r, g: g, b: b, executed: false });
+        generatedPoints++;
+    }
+    
+    renderScript();
+    log(`✨ 全彩漸層生成成功！[${colorStartInput.value}] ➡️ [${colorEndInput.value}]，共生成 ${generatedPoints} 點`);
+});
+
+resetDefaultBtn.addEventListener('click', () => {
+    lightScript = JSON.parse(JSON.stringify(DEFAULT_SCRIPT));
+    renderScript();
+    log("🔄 已還原為原始 RGB 燈光劇本");
+});
+
+clearAllBtn.addEventListener('click', () => { lightScript = []; renderScript(); log("🗑️ 已清空所有編排點"); });
+
+exportBtn.addEventListener('click', () => {
+    let output = "const lightScript = [\n";
+    lightScript.forEach(node => { output += `    { time: ${node.time.toFixed(2)}, r: ${node.r}, g: ${node.g}, b: ${node.b}, executed: false },\n`; });
+    output += "];";
+    navigator.clipboard.writeText(output);
+    alert("RGB 劇本程式碼已成功複製到剪貼簿！");
+});
+
+audioFile.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+        if (myAudio.src) URL.revokeObjectURL(myAudio.src);
+        myAudio.src = URL.createObjectURL(file);
+        myAudio.style.display = "block";
+        myAudio.load(); 
+        log(`🎵 成功載入音樂: ${file.name}`);
+        resetScriptStates();
+    }
+});
+
+// 💡 雙鈕右鈕控制（捕捉當前選擇顏色）
+function handlePressStart(e) {
+    e.preventDefault(); 
+    isRightBtnActive = true;
+    
+    if (isLocked255) cancelLockState();
+    
+    const currentTime = myAudio.currentTime;
+    const rgb = hexToRgb(colorPicker.value);
+    
+    // 根據調光推桿等比例決定輸出亮度
+    const factor = parseInt(brightnessSlider.value) / 100;
+    const targetR = Math.round(rgb.r * factor);
+    const targetG = Math.round(rgb.g * factor);
+    const targetB = Math.round(rgb.b * factor);
+
+    sendRGBThrottled(targetR, targetG, targetB);
+    updateSliderText(targetR, targetG, targetB);
+
+    lightScript.push({ time: currentTime, r: targetR, g: targetG, b: targetB, executed: false }); 
+    lastRecordR = targetR; lastRecordG = targetG; lastRecordB = targetB;
+    renderScript();
+}
+
+function handlePressEnd(e) {
+    e.preventDefault();
+    isRightBtnActive = false;
+    
+    if (isLocked255) {
+        log("🔒 鎖定保護中，放開按鈕不熄滅。");
+        return;
+    }
+    
+    const currentTime = myAudio.currentTime;
+    sendRGBThrottled(0, 0, 0);
+    updateSliderText(0, 0, 0);
+    
+    lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false }); 
+    lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
+    renderScript();
+}
+
+captureBtn.addEventListener('mousedown', handlePressStart);
+captureBtn.addEventListener('mouseup', handlePressEnd);
+captureBtn.addEventListener('touchstart', handlePressStart);
+captureBtn.addEventListener('touchend', handlePressEnd);
+
+// 💡 雙鈕左鈕控制（鎖定當前顏色）
+function handleLockClick(e) {
+    e.preventDefault();
+    const currentTime = myAudio.currentTime;
+    
+    if (!isLocked255) {
+        isLocked255 = true;
+        lockBtn.innerText = "🔒 已鎖定當前色";
+        lockBtn.classList.add('active');
+        
+        const rgb = hexToRgb(colorPicker.value);
+        const factor = parseInt(brightnessSlider.value) / 100;
+        const targetR = Math.round(rgb.r * factor);
+        const targetG = Math.round(rgb.g * factor);
+        const targetB = Math.round(rgb.b * factor);
+
+        sendRGBThrottled(targetR, targetG, targetB);
+        updateSliderText(targetR, targetG, targetB);
+        
+        if (!myAudio.paused && !myAudio.ended) {
+            lightScript.push({ time: currentTime, r: targetR, g: targetG, b: targetB, executed: false });
+            lastRecordR = targetR; lastRecordG = targetG; lastRecordB = targetB;
+            renderScript();
+        }
+        log(`🔒 鎖定色彩成功！放開右鈕不會熄滅，可使用推桿做色彩淡出。`);
+    } else {
+        cancelLockState();
+        if (!isRightBtnActive) {
+            sendRGBThrottled(0, 0, 0);
+            updateSliderText(0, 0, 0);
+            if (!myAudio.paused && !myAudio.ended) {
+                lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false });
+                lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
+                renderScript();
+            }
+        }
+    }
+}
+
+function cancelLockState() {
+    isLocked255 = false;
+    lockBtn.innerText = "🔓 鎖定當前色";
+    lockBtn.classList.remove('active');
+    log("🔓 已解除鎖定狀態。");
+}
+
+lockBtn.addEventListener('click', handleLockClick);
+lockBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handleLockClick(e); });
+
+function updateSliderText(r, g, b) {
+    currentBrightnessVal.innerText = `${r}, ${g}, ${b}`;
+}
+
+// 監聽滑桿觸摸狀態
+brightnessSlider.addEventListener('mousedown', () => { isUserDraggingSlider = true; });
+brightnessSlider.addEventListener('touchstart', () => { isUserDraggingSlider = true; });
+brightnessSlider.addEventListener('mouseup', () => { isUserDraggingSlider = false; });
+brightnessSlider.addEventListener('touchend', () => { isUserDraggingSlider = false; });
+
+// 💡 總亮度調光推桿控制核心
+brightnessSlider.addEventListener('input', (e) => {
+    const factor = parseInt(e.target.value) / 100; // 0.0 ~ 1.0
+    const rgb = hexToRgb(colorPicker.value);
+    
+    // 計算經過推桿比例縮放後的真實 RGB 輸出數值
+    const targetR = Math.round(rgb.r * factor);
+    const targetG = Math.round(rgb.g * factor);
+    const targetB = Math.round(rgb.b * factor);
+    
+    updateSliderText(targetR, targetG, targetB);
+    
+    // 解除滿載鎖定保護
+    if (isLocked255 && factor < 1.0) {
+        isLocked255 = false;
+        lockBtn.innerText = "🔓 鎖定當前色";
+        lockBtn.classList.remove('active');
+    }
+    
+    // 觸發智慧藍牙節流發送
+    sendRGBThrottled(targetR, targetG, targetB);
+    
+    if (!myAudio.paused && !myAudio.ended) {
+        const currentTime = myAudio.currentTime;
+        if (currentTime - lastRecordTime >= 0.1 || currentTime < lastRecordTime) {
+            // 💡 過濾完全重複點：只有當 R、G、B 任一通道有變時才紀錄！
+            if (targetR !== lastRecordR || targetG !== lastRecordG || targetB !== lastRecordB) {
+                lightScript.push({ time: currentTime, r: targetR, g: targetG, b: targetB, executed: false });
+                lastRecordR = targetR; lastRecordG = targetG; lastRecordB = targetB;
+                lastRecordTime = currentTime;
+                renderScript();
+            }
+        }
+    }
+});
+
+// 藍牙連線
+connectBtn.addEventListener('click', async () => {
+    try {
+        log("正在尋找 ESP32-C3 RGB 控制台...");
+        bluetoothDevice = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [SERVICE_UUID] });
+        statusDiv.innerText = "狀態：正在連接...";
+        const server = await bluetoothDevice.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        txCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+        statusDiv.innerText = `狀態：已連接到 ${bluetoothDevice.name}`;
+        log("藍牙全彩通訊連線成功！");
+    } catch (error) {
+        log("連線失敗: " + error);
+        statusDiv.innerText = "狀態：連線失敗";
+    }
+});
+
+function resetScriptStates() {
+    lightScript.forEach(node => node.executed = false);
+}
+myAudio.addEventListener('play', resetScriptStates);
+myAudio.addEventListener('seeked', resetScriptStates);
+
+// 核心播放時間軸監聽
+function updateTimeline() {
+    if (!myAudio.paused && !myAudio.ended) {
+        const currentTime = myAudio.currentTime;
+        
+        const minutes = Math.floor(currentTime / 60);
+        const seconds = Math.floor(currentTime % 60);
+        const milliseconds = Math.floor((currentTime % 1) * 100);
+        timeDisplay.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
+        
+        lightScript.forEach(node => {
+            if (currentTime >= node.time && !node.executed) {
+                node.executed = true;
+                log(`🎬 劇本自動觸發：${node.time.toFixed(2)}s -> 亮 RGB(${node.r}, ${node.g}, ${node.b})`);
+                
+                sendRGBThrottled(node.r, node.g, node.b);
+                
+                // 自動播放時同步聯動更新網頁 UI 面板外觀
+                if (!isUserDraggingSlider) {
+                    updateSliderText(node.r, node.g, node.b);
+                    // 根據當前最大通道逆推算出推桿與調色盤該呈現的樣子
+                    const maxVal = Math.max(node.r, node.g, node.b);
+                    if (maxVal > 0) {
+                        brightnessSlider.value = Math.round((maxVal / 255) * 100);
+                        // 嘗試還原基本色彩到 picker 上
+                        const scale = 255 / maxVal;
+                        colorPicker.value = rgbToHex(Math.min(255, Math.round(node.r*scale)), Math.min(255, Math.round(node.g*scale)), Math.min(255, Math.round(node.b*scale)));
+                        hexLabel.innerText = colorPicker.value.toUpperCase();
+                    } else {
+                        brightnessSlider.value = 0;
+                    }
+                }
+            }
+        });
+    }
+    requestAnimationFrame(updateTimeline);
+}
+myAudio.addEventListener('play', () => { requestAnimationFrame(updateTimeline); });
+
+// 💡 核心優化：RGB 三通道動態智慧藍牙節流發送 (Throttle 40ms)
+function sendRGBThrottled(r, g, b) {
+    if (!txCharacteristic) return;
+    
+    // 如果傳送值與上一次完全一致，立刻攔截不發送，極大省下藍牙頻寬
+    if (r === lastSentR && g === lastSentG && b === lastSentB) return;
+    
+    // 如果在前一次發送的 40ms 冷卻期內，先暫存最新狀態
+    if (bluetoothThrottleTimeout) {
+        lastSentR = r; lastSentG = g; lastSentB = b;
+        return;
+    }
+    
+    // 冷卻以外的時間，立刻發送 3 位元組包
+    executeBluetoothSend(r, g, b);
+    
+    // 啟動 40ms 鎖定
+    bluetoothThrottleTimeout = setTimeout(() => {
+        bluetoothThrottleTimeout = null;
+        // 冷卻結束後，如果這段期間使用者手速過快有產生新色彩，自動補發最新色彩
+        const factor = parseInt(brightnessSlider.value) / 100;
+        const currentRgb = hexToRgb(colorPicker.value);
+        const currentTargetR = Math.round(currentRgb.r * factor);
+        const currentTargetG = Math.round(currentRgb.g * factor);
+        const currentTargetB = Math.round(currentRgb.b * factor);
+        
+        if (currentTargetR !== r || currentTargetG !== g || currentTargetB !== b) {
+            executeBluetoothSend(currentTargetR, currentTargetG, currentTargetB);
+        }
+    }, 40); 
+}
+
+async function executeBluetoothSend(r, g, b) {
+    if (!txCharacteristic) return;
+    try {
+        // 打包成 3 個 Bytes 送給 ESP32-C3
+        const data = new Uint8Array([r, g, b]);
+        await txCharacteristic.writeValue(data);
+        lastSentR = r; lastSentG = g; lastSentB = b;
+    } catch (error) {}
+}
+
+renderScript();
+</script>
+</body>
+</html>
