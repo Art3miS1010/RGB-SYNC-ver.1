@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V7.3</title>
+    <title>扯鈴 RGB 燈光編排工作站 V7.4</title>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
@@ -72,7 +72,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V7.3 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V7.4 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -189,7 +189,11 @@ const CHARACTERISTIC_UUID = "00002a56-0000-1000-8000-00805f9b34fb";
 
 let bluetoothDevice = null;
 let txCharacteristic = null;
-let isSending = false; // 藍牙非同步保護鎖
+
+// ⚡ 藍牙防爆發：時間戳與狀態鎖
+let isSending = false;
+let lastBluetoothSendTime = 0; 
+const BLUETOOTH_MIN_INTERVAL = 35; // 限制發送最小間隔 35ms，防 BLE 快取塞爆
 
 const DEFAULT_SCRIPT = [
     { time: 3.0,  r: 255, g: 0,   b: 0,   executed: false }, 
@@ -198,6 +202,9 @@ const DEFAULT_SCRIPT = [
 ];
 
 let lightScript = JSON.parse(JSON.stringify(DEFAULT_SCRIPT));
+
+// ⚡ 播放機制優化：指針索引，避免每次都掃描上百個 node
+let currentScriptIndex = 0; 
 
 const connectBtn = document.getElementById('connectBtn');
 const statusDiv = document.getElementById('status');
@@ -316,10 +323,11 @@ function processWheelData() {
     if (!myAudio.paused && !myAudio.ended) {
         const currentTime = myAudio.currentTime;
         if (target.r !== lastRecordR || target.g !== lastRecordG || target.b !== lastRecordB || currentTime - lastRecordTime >= 0.05) {
-            lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
+            lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b });
             lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
             lastRecordTime = currentTime;
-            renderScript();
+            syncTimelinePointer(); // 🚀 優化：動態增加點時重算指針
+            updatePointCountOnly();
         }
     }
 }
@@ -335,7 +343,6 @@ window.setQuickColor = (hex) => {
     executeBluetoothSend(target.r, target.g, target.b);
 };
 
-// 💡 效能優化：抽出計數器刷新，不用每次都重繪整個 DOM 清單
 function updatePointCountOnly() {
     pointCountSpan.innerText = lightScript.length;
 }
@@ -350,7 +357,6 @@ function renderScript() {
         return;
     }
     
-    // 用 DocumentFragment 批次注入，大幅優化長劇本時的 DOM 效能
     const fragment = document.createDocumentFragment();
     lightScript.forEach((node, index) => {
         const item = document.createElement('div');
@@ -374,28 +380,30 @@ function renderScript() {
     scriptListDiv.appendChild(fragment);
 }
 
-window.updateNodeTime = (index, value) => { lightScript[index].time = parseFloat(value); resetScriptStates(); lightScript.sort((a, b) => a.time - b.time); renderScript();};
+window.updateNodeTime = (index, value) => { 
+    lightScript[index].time = parseFloat(value); 
+    lightScript.sort((a, b) => a.time - b.time); 
+    syncTimelinePointer();
+    renderScript();
+};
 window.updateNodeRGBChannel = (index, channel, value) => { lightScript[index][channel] = parseInt(value); renderScript(); };
-window.deleteNode = (index) => { lightScript.splice(index, 1); renderScript(); };
+window.deleteNode = (index) => { lightScript.splice(index, 1); syncTimelinePointer(); renderScript(); };
 
-// 💡 核心新增：手動新增時間點功能
 addNodeBtn.addEventListener('click', () => {
     const currentTime = myAudio.currentTime || 0;
     const currentRgb = getCalculatedRGB(colorPicker.color.rgb);
     
-    // 直接塞入目前選擇器上的顏色
     lightScript.push({
         time: currentTime,
         r: currentRgb.r,
         g: currentRgb.g,
-        b: currentRgb.b,
-        executed: false
+        b: currentRgb.b
     });
     
+    lightScript.sort((a, b) => a.time - b.time);
+    syncTimelinePointer();
     renderScript();
     log(`➕ 手動新增：於 ${currentTime.toFixed(2)}s 插入一筆點 RGB(${currentRgb.r}, ${currentRgb.g}, ${currentRgb.b})`);
-    
-    // 自動捲動到清單最底部，方便立刻編輯
     scriptListDiv.scrollTop = scriptListDiv.scrollHeight;
 });
 
@@ -409,7 +417,7 @@ window.loadFromSlot = (slotNumber) => {
     const savedData = localStorage.getItem(`diabolo_rgb_slot_${slotNumber}`);
     if (savedData) {
         lightScript = JSON.parse(savedData);
-        resetScriptStates();
+        syncTimelinePointer();
         renderScript();
         myAudio.currentTime = 0;
         myAudio.play();
@@ -438,18 +446,19 @@ generateFxBtn.addEventListener('click', () => {
         const g = Math.round((rgbStart.g + (rgbEnd.g - rgbStart.g) * progress) * (bStart + (bEnd - bStart) * progress));
         const b = Math.round((rgbStart.b + (rgbEnd.b - rgbStart.b) * progress) * (bStart + (bEnd - bStart) * progress));
         
-        lightScript.push({ time: t, r: r, g: g, b: b, executed: false });
+        lightScript.push({ time: t, r: r, g: g, b: b });
     }
+    syncTimelinePointer();
     renderScript();
     log(`✨ 全彩+亮度漸層生成成功！`);
 });
 
-resetDefaultBtn.addEventListener('click', () => { lightScript = JSON.parse(JSON.stringify(DEFAULT_SCRIPT)); renderScript(); log("🔄 已還原為原始 RGB 燈光劇本"); });
-clearAllBtn.addEventListener('click', () => { lightScript = []; renderScript(); log("🗑️ 已清空所有編排點"); });
+resetDefaultBtn.addEventListener('click', () => { lightScript = JSON.parse(JSON.stringify(DEFAULT_SCRIPT)); syncTimelinePointer(); renderScript(); log("🔄 已還原為原始 RGB 燈光劇本"); });
+clearAllBtn.addEventListener('click', () => { lightScript = []; syncTimelinePointer(); renderScript(); log("🗑️ 已清空所有編排點"); });
 
 exportBtn.addEventListener('click', () => {
     let output = "const lightScript = [\n";
-    lightScript.forEach(node => { output += `    { time: ${node.time.toFixed(2)}, r: ${node.r}, g: ${node.g}, b: ${node.b}, executed: false },\n`; });
+    lightScript.forEach(node => { output += `    { time: ${node.time.toFixed(2)}, r: ${node.r}, g: ${node.g}, b: ${node.b} },\n`; });
     output += "];";
     navigator.clipboard.writeText(output);
     alert("RGB 劇本程式碼已成功複製到剪貼簿！");
@@ -463,26 +472,26 @@ audioFile.addEventListener('change', (e) => {
         myAudio.style.display = "block";
         myAudio.load(); 
         log(`🎵 成功載入音樂: ${file.name}`);
-        resetScriptStates();
+        syncTimelinePointer();
     }
 });
 
-// 💡 效能優化版全亮手操
 function handlePressStart(e) {
     e.preventDefault(); 
-    if (isRightBtnActive) return; // 防止重複觸發
+    if (isRightBtnActive) return;
     isRightBtnActive = true;
     if (isLocked255) cancelLockState();
     
     const currentTime = myAudio.currentTime;
     const target = getMaximizedRGB(colorPicker.color.rgb);
 
-    executeBluetoothSend(target.r, target.g, target.b);
+    // 強制立即發送手操訊號（忽略節流閥，確保即時性）
+    executeBluetoothSendImmediate(target.r, target.g, target.b);
     updateSliderText(target.r, target.g, target.b);
 
     if (!myAudio.paused && !myAudio.ended) {
-        lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
-        updatePointCountOnly(); // 🚀 優化：先不重新 renderScript，只更新點數
+        lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b });
+        updatePointCountOnly(); 
         log(`🔥 手操按住：最大亮度 RGB(${target.r}, ${target.g}, ${target.b})`);
     }
     
@@ -500,16 +509,17 @@ function handlePressEnd(e) {
     }
     
     const currentTime = myAudio.currentTime;
-    executeBluetoothSend(0, 0, 0);
+    executeBluetoothSendImmediate(0, 0, 0); // 強制立即熄滅
     updateSliderText(0, 0, 0);
     
     if (!myAudio.paused && !myAudio.ended) {
-        lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false }); 
+        lightScript.push({ time: currentTime, r: 0, g: 0, b: 0 }); 
         log(`⏹️ 手操釋放：發送全滅點`);
     }
     
     lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
-    renderScript(); // 🚀 優化：放開時再統一重新繪製清單，徹底解決快速按放時的延遲卡死
+    syncTimelinePointer(); // 重新排序並刷新指針
+    renderScript(); 
 }
 
 captureBtn.addEventListener('mousedown', handlePressStart);
@@ -529,7 +539,7 @@ function handleLockClick(e) {
         
         const target = isRightBtnActive ? getMaximizedRGB(colorPicker.color.rgb) : getCalculatedRGB(colorPicker.color.rgb);
         
-        executeBluetoothSend(target.r, target.g, target.b);
+        executeBluetoothSendImmediate(target.r, target.g, target.b);
         updateSliderText(target.r, target.g, target.b);
         
         const maxVal = Math.max(target.r, target.g, target.b);
@@ -538,18 +548,20 @@ function handleLockClick(e) {
         }
 
         if (!myAudio.paused && !myAudio.ended) {
-            lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
+            lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b });
             lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
+            syncTimelinePointer();
             renderScript();
         }
         log(`🔒 鎖定成功！RGB(${target.r}, ${target.g}, ${target.b})`);
     } else {
         cancelLockState();
         if (!isRightBtnActive) {
-            executeBluetoothSend(0, 0, 0);
+            executeBluetoothSendImmediate(0, 0, 0);
             updateSliderText(0, 0, 0);
             if (!myAudio.paused && !myAudio.ended) {
-                lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false });
+                lightScript.push({ time: currentTime, r: 0, g: 0, b: 0 });
+                syncTimelinePointer();
                 renderScript();
             }
             lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
@@ -586,16 +598,17 @@ brightnessSlider.addEventListener('input', (e) => {
     updateSliderText(targetR, targetG, targetB);
     if (isLocked255 && factor < 1.0) cancelLockState();
     
-    executeBluetoothSend(targetR, targetG, targetB);
+    executeBluetoothSend(targetR, targetG, targetB); // 這裡使用防爆發限制
     
     if (!myAudio.paused && !myAudio.ended) {
         const currentTime = myAudio.currentTime;
         if (currentTime - lastRecordTime >= 0.05) {
             if (targetR !== lastRecordR || targetG !== lastRecordG || targetB !== lastRecordB) {
-                lightScript.push({ time: currentTime, r: targetR, g: targetG, b: targetB, executed: false });
+                lightScript.push({ time: currentTime, r: targetR, g: targetG, b: targetB });
                 lastRecordR = targetR; lastRecordG = targetG; lastRecordB = targetB;
                 lastRecordTime = currentTime;
-                renderScript();
+                syncTimelinePointer();
+                updatePointCountOnly();
             }
         }
     }
@@ -617,12 +630,26 @@ connectBtn.addEventListener('click', async () => {
     }
 });
 
-function resetScriptStates() {
-    lightScript.forEach(node => node.executed = false);
+// 🚀 核心優化：同步指針索引
+function syncTimelinePointer() {
+    lightScript.sort((a, b) => a.time - b.time);
+    const currentTime = myAudio.currentTime;
+    // 找出目前播放時間落在哪一個節點之前
+    let foundIndex = 0;
+    for (let i = 0; i < lightScript.length; i++) {
+        if (lightScript[i].time > currentTime) {
+            foundIndex = i;
+            break;
+        }
+        foundIndex = lightScript.length; // 如果時間已經超過最後一個點
+    }
+    currentScriptIndex = foundIndex;
 }
-myAudio.addEventListener('play', resetScriptStates);
-myAudio.addEventListener('seeked', resetScriptStates);
 
+myAudio.addEventListener('play', syncTimelinePointer);
+myAudio.addEventListener('seeked', syncTimelinePointer);
+
+// 🚀 核心優化：指針式時間軸播放（完全消除 forEach 百點掃描負擔）
 function updateTimeline() {
     if (!myAudio.paused && !myAudio.ended) {
         const currentTime = myAudio.currentTime;
@@ -632,44 +659,67 @@ function updateTimeline() {
         const milliseconds = Math.floor((currentTime % 1) * 100);
         timeDisplay.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
         
+        // 如果目前不是在使用手操控制
         if (!isRightBtnActive && !isUserDraggingSlider && !isLocked255 && !isUserInteractingWithWheel) {
-            lightScript.forEach(node => {
-                if (currentTime >= node.time && !node.executed) {
-                    node.executed = true;
-                    log(`🎬 劇本自動觸發：${node.time.toFixed(2)}s -> 亮 RGB(${node.r}, ${node.g}, ${node.b})`);
-                    
-                    executeBluetoothSend(node.r, node.g, node.b);
-                    updateSliderText(node.r, node.g, node.b);
-                    
-                    const maxVal = Math.max(node.r, node.g, node.b);
-                    if (maxVal > 0) {
-                        brightnessSlider.value = Math.round((maxVal / 255) * 100);
-                        const scale = 255 / maxVal;
-                        colorPicker.color.hexString = rgbToHex(Math.min(255, Math.round(node.r*scale)), Math.min(255, Math.round(node.g*scale)), Math.min(255, Math.round(node.b*scale)));
-                    } else {
-                        brightnessSlider.value = 0;
-                    }
+            
+            // 只要目前指針指向的點小於等於目前播放時間，就連續觸發
+            while (currentScriptIndex < lightScript.length && currentTime >= lightScript[currentScriptIndex].time) {
+                const node = lightScript[currentScriptIndex];
+                
+                log(`🎬 劇本自動觸發：[第 ${currentScriptIndex + 1} 點] ${node.time.toFixed(2)}s -> 亮 RGB(${node.r}, ${node.g}, ${node.b})`);
+                
+                executeBluetoothSendImmediate(node.r, node.g, node.b); // 自動播放使用立即發送
+                updateSliderText(node.r, node.g, node.b);
+                
+                // 同步 UI 狀態
+                const maxVal = Math.max(node.r, node.g, node.b);
+                if (maxVal > 0) {
+                    brightnessSlider.value = Math.round((maxVal / 255) * 100);
+                    const scale = 255 / maxVal;
+                    colorPicker.color.hexString = rgbToHex(Math.min(255, Math.round(node.r*scale)), Math.min(255, Math.round(node.g*scale)), Math.min(255, Math.round(node.b*scale)));
+                } else {
+                    brightnessSlider.value = 0;
                 }
-            });
+                
+                currentScriptIndex++; // 指針往下推
+            }
         }
     }
     requestAnimationFrame(updateTimeline);
 }
 myAudio.addEventListener('play', () => { requestAnimationFrame(updateTimeline); });
 
-// 💡 藍牙發送保護機制
+// 🚀 核心優化：一般手操與推桿使用的「防爆發節流閥」發送
 async function executeBluetoothSend(r, g, b) {
     if (!txCharacteristic || isSending) return;
     if (r === lastSentR && g === lastSentG && b === lastSentB) return;
+    
+    const now = performance.now();
+    // 檢查跟上一次發送的時間間隔是否小於安全閥值
+    if (now - lastBluetoothSendTime < BLUETOOTH_MIN_INTERVAL) return;
+
     try {
         isSending = true;
         const data = new Uint8Array([r, g, b]);
         await txCharacteristic.writeValue(data);
         lastSentR = r; lastSentG = g; lastSentB = b;
+        lastBluetoothSendTime = now;
     } catch (error) {
     } finally {
-        isSending = false; // 釋放保護鎖
+        isSending = false;
     }
+}
+
+// 🚀 核心優化：手操按下去、放開、或自動播放劇本時使用的「強制立即發送」
+async function executeBluetoothSendImmediate(r, g, b) {
+    if (!txCharacteristic) return;
+    if (r === lastSentR && g === lastSentG && b === lastSentB) return;
+    try {
+        const data = new Uint8Array([r, g, b]);
+        await txCharacteristic.writeValue(data);
+        lastSentR = r; lastSentG = g; lastSentB = b;
+        lastBluetoothSendTime = performance.now();
+    } catch (error) {}
 }
 
 renderScript();
