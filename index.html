@@ -596,9 +596,17 @@ brightnessSlider.addEventListener('touchend', () => { isUserDraggingSlider = fal
 brightnessSlider.addEventListener('input', (e) => {
     const factor = parseInt(e.target.value) / 100; 
     const rgb = colorPicker.color.rgb;
-    const targetR = Math.round(rgb.r * factor);
-    const targetG = Math.round(rgb.g * factor);
-    const targetB = Math.round(rgb.b * factor);
+    
+    let targetR = Math.round(rgb.r * factor);
+    let targetG = Math.round(rgb.g * factor);
+    let targetB = Math.round(rgb.b * factor);
+    
+    // 🚀 軟體防漏電鐵律：只要滑桿歸零，強制斬斷所有微小雜訊，確保輸出絕對是 0
+    if (factor === 0) {
+        targetR = 0;
+        targetG = 0;
+        targetB = 0;
+    }
     
     updateSliderText(targetR, targetG, targetB);
     if (isLocked255 && factor < 1.0) cancelLockState();
@@ -618,7 +626,7 @@ brightnessSlider.addEventListener('input', (e) => {
         }
     }
 });
-
+    
 connectBtn.addEventListener('click', async () => {
     try {
         log("正在尋找 ESP32-C3 RGB 控制台...");
