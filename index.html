@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V7.4.1</title>
+    <title>扯鈴 RGB 燈光編排工作站 V7.4.2</title>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
@@ -72,7 +72,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V7.4.1 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V7.4.2 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -272,6 +272,7 @@ function rgbToHex(r, g, b) {
 
 function getCalculatedRGB(colorRgb) {
     const factor = parseInt(brightnessSlider.value) / 100;
+    if (factor === 0) return { r: 0, g: 0, b: 0 }; // 🚀 預防漏電：滑桿為0時強制給絕對0
     return {
         r: Math.round(colorRgb.r * factor),
         g: Math.round(colorRgb.g * factor),
@@ -473,7 +474,7 @@ audioFile.addEventListener('change', (e) => {
     }
 });
 
-// 💡 修正後的全亮手操：按下按鈕時滑桿自動跳到 100
+// 💡 手操全亮：按下去滑桿自動同步切換為 100
 function handlePressStart(e) {
     e.preventDefault(); 
     if (isRightBtnActive) return;
@@ -483,7 +484,7 @@ function handlePressStart(e) {
     const currentTime = myAudio.currentTime;
     const target = getMaximizedRGB(colorPicker.color.rgb);
 
-    // 💡 核心修正：按下按鈕時，將畫面上的亮度滑桿同步設為 100%
+    // 💡 同步滑桿 UI 數值
     brightnessSlider.value = 100;
 
     executeBluetoothSendImmediate(target.r, target.g, target.b);
@@ -498,7 +499,7 @@ function handlePressStart(e) {
     lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
 }
 
-// 💡 修正後的全亮手操：放開按鈕時滑桿自動跳到 0
+// 💡 手操全滅：放開按鈕滑桿自動同步歸 0
 function handlePressEnd(e) {
     e.preventDefault();
     if (!isRightBtnActive) return; 
@@ -511,7 +512,7 @@ function handlePressEnd(e) {
     
     const currentTime = myAudio.currentTime;
 
-    // 💡 核心修正：放開按鈕時，將畫面上的亮度滑桿同步歸零 0%
+    // 💡 同步滑桿 UI 數值
     brightnessSlider.value = 0;
 
     executeBluetoothSendImmediate(0, 0, 0); 
@@ -590,28 +591,43 @@ function updateSliderText(r, g, b) {
 
 brightnessSlider.addEventListener('mousedown', () => { isUserDraggingSlider = true; });
 brightnessSlider.addEventListener('touchstart', () => { isUserDraggingSlider = true; });
-brightnessSlider.addEventListener('mouseup', () => { isUserDraggingSlider = false; });
-brightnessSlider.addEventListener('touchend', () => { isUserDraggingSlider = false; });
 
-brightnessSlider.addEventListener('input', (e) => {
-    const factor = parseInt(e.target.value) / 100; 
+// 🚀 核心優化：放開滑桿時，補發強制尾刀（穿透節流閥），防止滑太快卡微亮
+brightnessSlider.addEventListener('mouseup', () => { 
+    isUserDraggingSlider = false; 
+    triggerSliderFinalCheck();
+});
+brightnessSlider.addEventListener('touchend', () => { 
+    isUserDraggingSlider = false; 
+    triggerSliderFinalCheck();
+});
+
+function triggerSliderFinalCheck() {
+    const factor = parseInt(brightnessSlider.value) / 100; 
     const rgb = colorPicker.color.rgb;
-    
     let targetR = Math.round(rgb.r * factor);
     let targetG = Math.round(rgb.g * factor);
     let targetB = Math.round(rgb.b * factor);
     
-    // 🚀 軟體防漏電鐵律：只要滑桿歸零，強制斬斷所有微小雜訊，確保輸出絕對是 0
-    if (factor === 0) {
-        targetR = 0;
-        targetG = 0;
-        targetB = 0;
-    }
+    if (factor === 0) { targetR = 0; targetG = 0; targetB = 0; }
+    
+    updateSliderText(targetR, targetG, targetB);
+    executeBluetoothSendImmediate(targetR, targetG, targetB); // ⚡ 強制發送終點值
+}
+
+brightnessSlider.addEventListener('input', (e) => {
+    const factor = parseInt(e.target.value) / 100; 
+    const rgb = colorPicker.color.rgb;
+    let targetR = Math.round(rgb.r * factor);
+    let targetG = Math.round(rgb.g * factor);
+    let targetB = Math.round(rgb.b * factor);
+    
+    if (factor === 0) { targetR = 0; targetG = 0; targetB = 0; }
     
     updateSliderText(targetR, targetG, targetB);
     if (isLocked255 && factor < 1.0) cancelLockState();
     
-    executeBluetoothSend(targetR, targetG, targetB); 
+    executeBluetoothSend(targetR, targetG, targetB); // 一般拖曳受 35ms 節流保護
     
     if (!myAudio.paused && !myAudio.ended) {
         const currentTime = myAudio.currentTime;
@@ -626,7 +642,7 @@ brightnessSlider.addEventListener('input', (e) => {
         }
     }
 });
-    
+
 connectBtn.addEventListener('click', async () => {
     try {
         log("正在尋找 ESP32-C3 RGB 控制台...");
