@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V7.2</title>
+    <title>扯鈴 RGB 燈光編排工作站 V7.3</title>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
@@ -12,6 +12,8 @@
         button.danger { background: #ff4d4d; }
         button.danger:hover { background: #cc3333; }
         button.save-slot { background: #6c5ce7; }
+        button.success { background: #2ed573; }
+        button.success:hover { background: #26af5f; }
         
         .container { max-width: 650px; margin: 0 auto; background: #222831; padding: 20px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: left; }
         h2, h3 { text-align: center; color: #00adb5; margin-block: 10px; }
@@ -70,7 +72,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V7.2 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V7.3 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -105,7 +107,7 @@
         
         <div class="slider-container">
             <div class="slider-text-row">
-                <span>🎛️ 總亮度調光推桿 (0-100%)</span>
+                <span>🛞 總亮度調光推桿 (0-100%)</span>
                 <span style="color:#00adb5;">當前實際 RGB: <span id="currentBrightnessVal">0, 0, 0</span></span>
             </div>
             <input type="range" min="0" max="100" value="100" class="my-slider" id="brightnessSlider">
@@ -166,8 +168,9 @@
 
     <div class="editor-zone">
         <h3>2. 當前燈光劇本清單 (可即時修改)</h3>
-        <div style="display: flex; justify-content: space-between;">
-            <button id="resetDefaultBtn" style="background: #48dbfb; color: #222831; font-weight: bold;">🔄 還原原廠設定</button>
+        <div style="display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+            <button id="addNodeBtn" class="success">➕ 手動新增時間點</button>
+            <button id="resetDefaultBtn" style="background: #48dbfb; color: #222831; font-weight: bold;">🔄 還原原廠</button>
             <button id="clearAllBtn" class="danger">清空全部點</button>
         </div>
         <div id="scriptList" class="script-list"></div>
@@ -186,6 +189,7 @@ const CHARACTERISTIC_UUID = "00002a56-0000-1000-8000-00805f9b34fb";
 
 let bluetoothDevice = null;
 let txCharacteristic = null;
+let isSending = false; // 藍牙非同步保護鎖
 
 const DEFAULT_SCRIPT = [
     { time: 3.0,  r: 255, g: 0,   b: 0,   executed: false }, 
@@ -208,6 +212,7 @@ const exportBtn = document.getElementById('exportBtn');
 const clearAllBtn = document.getElementById('clearAllBtn');
 const resetDefaultBtn = document.getElementById('resetDefaultBtn');
 const pointCountSpan = document.getElementById('pointCount');
+const addNodeBtn = document.getElementById('addNodeBtn');
 
 const hexLabel = document.getElementById('hexLabel');
 const brightnessSlider = document.getElementById('brightnessSlider');
@@ -232,7 +237,6 @@ let lastRecordTime = 0;
 let lastRecordR = -1, lastRecordG = -1, lastRecordB = -1;
 let lastSentR = -1, lastSentG = -1, lastSentB = -1;
 
-// 初始化色彩圓盤
 var colorPicker = new iro.ColorPicker("#colorPickerWheel", {
     width: 200,
     color: "#ff0000",
@@ -331,16 +335,23 @@ window.setQuickColor = (hex) => {
     executeBluetoothSend(target.r, target.g, target.b);
 };
 
+// 💡 效能優化：抽出計數器刷新，不用每次都重繪整個 DOM 清單
+function updatePointCountOnly() {
+    pointCountSpan.innerText = lightScript.length;
+}
+
 function renderScript() {
     scriptListDiv.innerHTML = '';
     lightScript.sort((a, b) => a.time - b.time);
-    pointCountSpan.innerText = lightScript.length;
+    updatePointCountOnly();
     
     if (lightScript.length === 0) {
-        scriptListDiv.innerHTML = '<div style="color:#aaa; text-align:center; padding:20px;">目前沒有任何燈光點，請長按或滑動滑桿捕捉！</div>';
+        scriptListDiv.innerHTML = '<div style="color:#aaa; text-align:center; padding:20px;">目前沒有任何燈光點，請點擊新增或長按捕捉！</div>';
         return;
     }
     
+    // 用 DocumentFragment 批次注入，大幅優化長劇本時的 DOM 效能
+    const fragment = document.createDocumentFragment();
     lightScript.forEach((node, index) => {
         const item = document.createElement('div');
         item.className = 'script-item';
@@ -358,13 +369,35 @@ function renderScript() {
             </div>
             <button class="danger" style="padding: 2px 6px; font-size: 11px;" onclick="deleteNode(${index})">刪除</button>
         `;
-        scriptListDiv.appendChild(item);
+        fragment.appendChild(item);
     });
+    scriptListDiv.appendChild(fragment);
 }
 
-window.updateNodeTime = (index, value) => { lightScript[index].time = parseFloat(value); resetScriptStates(); };
+window.updateNodeTime = (index, value) => { lightScript[index].time = parseFloat(value); resetScriptStates(); lightScript.sort((a, b) => a.time - b.time); renderScript();};
 window.updateNodeRGBChannel = (index, channel, value) => { lightScript[index][channel] = parseInt(value); renderScript(); };
 window.deleteNode = (index) => { lightScript.splice(index, 1); renderScript(); };
+
+// 💡 核心新增：手動新增時間點功能
+addNodeBtn.addEventListener('click', () => {
+    const currentTime = myAudio.currentTime || 0;
+    const currentRgb = getCalculatedRGB(colorPicker.color.rgb);
+    
+    // 直接塞入目前選擇器上的顏色
+    lightScript.push({
+        time: currentTime,
+        r: currentRgb.r,
+        g: currentRgb.g,
+        b: currentRgb.b,
+        executed: false
+    });
+    
+    renderScript();
+    log(`➕ 手動新增：於 ${currentTime.toFixed(2)}s 插入一筆點 RGB(${currentRgb.r}, ${currentRgb.g}, ${currentRgb.b})`);
+    
+    // 自動捲動到清單最底部，方便立刻編輯
+    scriptListDiv.scrollTop = scriptListDiv.scrollHeight;
+});
 
 window.saveToSlot = (slotNumber) => {
     localStorage.setItem(`diabolo_rgb_slot_${slotNumber}`, JSON.stringify(lightScript));
@@ -399,32 +432,19 @@ generateFxBtn.addEventListener('click', () => {
         return;
     }
     
-    let generatedPoints = 0;
-    const step = 0.1;
-    
-    for (let t = startT; t <= endT; t += step) {
+    for (let t = startT; t <= endT; t += 0.1) {
         const progress = (t - startT) / (endT - startT);
-        const rBase = rgbStart.r + (rgbEnd.r - rgbStart.r) * progress;
-        const gBase = rgbStart.g + (rgbEnd.g - rgbStart.g) * progress;
-        const bBase = rgbStart.b + (rgbEnd.b - rgbStart.b) * progress;
-        const currentFactor = bStart + (bEnd - bStart) * progress;
-        const r = Math.round(rBase * currentFactor);
-        const g = Math.round(gBase * currentFactor);
-        const b = Math.round(bBase * currentFactor);
+        const r = Math.round((rgbStart.r + (rgbEnd.r - rgbStart.r) * progress) * (bStart + (bEnd - bStart) * progress));
+        const g = Math.round((rgbStart.g + (rgbEnd.g - rgbStart.g) * progress) * (bStart + (bEnd - bStart) * progress));
+        const b = Math.round((rgbStart.b + (rgbEnd.b - rgbStart.b) * progress) * (bStart + (bEnd - bStart) * progress));
         
         lightScript.push({ time: t, r: r, g: g, b: b, executed: false });
-        generatedPoints++;
     }
     renderScript();
-    log(`✨ 全彩+亮度漸層生成成功！[${colorStartInput.value}] ➡️ [${colorEndInput.value}]`);
+    log(`✨ 全彩+亮度漸層生成成功！`);
 });
 
-resetDefaultBtn.addEventListener('click', () => {
-    lightScript = JSON.parse(JSON.stringify(DEFAULT_SCRIPT));
-    renderScript();
-    log("🔄 已還原為原始 RGB 燈光劇本");
-});
-
+resetDefaultBtn.addEventListener('click', () => { lightScript = JSON.parse(JSON.stringify(DEFAULT_SCRIPT)); renderScript(); log("🔄 已還原為原始 RGB 燈光劇本"); });
 clearAllBtn.addEventListener('click', () => { lightScript = []; renderScript(); log("🗑️ 已清空所有編排點"); });
 
 exportBtn.addEventListener('click', () => {
@@ -447,24 +467,23 @@ audioFile.addEventListener('change', (e) => {
     }
 });
 
-// 💡 修正回來的全亮手操：按下與放開都會正確寫入點
+// 💡 效能優化版全亮手操
 function handlePressStart(e) {
     e.preventDefault(); 
+    if (isRightBtnActive) return; // 防止重複觸發
     isRightBtnActive = true;
     if (isLocked255) cancelLockState();
     
     const currentTime = myAudio.currentTime;
     const target = getMaximizedRGB(colorPicker.color.rgb);
 
-    // 即時硬體輸出
     executeBluetoothSend(target.r, target.g, target.b);
     updateSliderText(target.r, target.g, target.b);
 
-    // 💡 修正：如果音樂在播放，按下時必須立刻寫入「最大亮度點」
     if (!myAudio.paused && !myAudio.ended) {
         lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
-        renderScript();
-        log(`🔥 手操按住：成功記錄最大亮度 RGB(${target.r}, ${target.g}, ${target.b}) 於 ${currentTime.toFixed(2)}s`);
+        updatePointCountOnly(); // 🚀 優化：先不重新 renderScript，只更新點數
+        log(`🔥 手操按住：最大亮度 RGB(${target.r}, ${target.g}, ${target.b})`);
     }
     
     lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
@@ -481,16 +500,16 @@ function handlePressEnd(e) {
     }
     
     const currentTime = myAudio.currentTime;
-    lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
     executeBluetoothSend(0, 0, 0);
     updateSliderText(0, 0, 0);
     
-    // 💡 放開時，立刻寫入「全滅點」
     if (!myAudio.paused && !myAudio.ended) {
         lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false }); 
-        renderScript();
-        log(`⏹️ 手操釋放：成功記錄全滅 (0,0,0) 於 ${currentTime.toFixed(2)}s`);
+        log(`⏹️ 手操釋放：發送全滅點`);
     }
+    
+    lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
+    renderScript(); // 🚀 優化：放開時再統一重新繪製清單，徹底解決快速按放時的延遲卡死
 }
 
 captureBtn.addEventListener('mousedown', handlePressStart);
@@ -523,7 +542,7 @@ function handleLockClick(e) {
             lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
             renderScript();
         }
-        log(`🔒 鎖定成功！抓取數值為 RGB(${target.r}, ${target.g}, ${target.b})`);
+        log(`🔒 鎖定成功！RGB(${target.r}, ${target.g}, ${target.b})`);
     } else {
         cancelLockState();
         if (!isRightBtnActive) {
@@ -638,14 +657,19 @@ function updateTimeline() {
 }
 myAudio.addEventListener('play', () => { requestAnimationFrame(updateTimeline); });
 
+// 💡 藍牙發送保護機制
 async function executeBluetoothSend(r, g, b) {
-    if (!txCharacteristic) return;
+    if (!txCharacteristic || isSending) return;
     if (r === lastSentR && g === lastSentG && b === lastSentB) return;
     try {
+        isSending = true;
         const data = new Uint8Array([r, g, b]);
         await txCharacteristic.writeValue(data);
         lastSentR = r; lastSentG = g; lastSentB = b;
-    } catch (error) {}
+    } catch (error) {
+    } finally {
+        isSending = false; // 釋放保護鎖
+    }
 }
 
 renderScript();
