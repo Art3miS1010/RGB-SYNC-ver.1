@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V7.1</title>
+    <title>扯鈴 RGB 燈光編排工作站 V7.2</title>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
@@ -70,7 +70,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V7.1 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V7.2 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -447,6 +447,7 @@ audioFile.addEventListener('change', (e) => {
     }
 });
 
+// 💡 修正回來的全亮手操：按下與放開都會正確寫入點
 function handlePressStart(e) {
     e.preventDefault(); 
     isRightBtnActive = true;
@@ -455,10 +456,17 @@ function handlePressStart(e) {
     const currentTime = myAudio.currentTime;
     const target = getMaximizedRGB(colorPicker.color.rgb);
 
+    // 即時硬體輸出
     executeBluetoothSend(target.r, target.g, target.b);
     updateSliderText(target.r, target.g, target.b);
 
-    // 移除大按鈕按下時重複塞點的行為，交給放開或鎖定按鈕統一處理
+    // 💡 修正：如果音樂在播放，按下時必須立刻寫入「最大亮度點」
+    if (!myAudio.paused && !myAudio.ended) {
+        lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
+        renderScript();
+        log(`🔥 手操按住：成功記錄最大亮度 RGB(${target.r}, ${target.g}, ${target.b}) 於 ${currentTime.toFixed(2)}s`);
+    }
+    
     lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
 }
 
@@ -467,7 +475,6 @@ function handlePressEnd(e) {
     if (!isRightBtnActive) return; 
     isRightBtnActive = false;
     
-    // 💡 關鍵修正：如果放開全亮鍵時，發現「鎖定鍵已經被按下了」，就不執行全滅！
     if (isLocked255) {
         log("🔒 由於鎖定鍵已啟用，放開時維持鎖定色亮度，不熄滅。");
         return; 
@@ -478,9 +485,12 @@ function handlePressEnd(e) {
     executeBluetoothSend(0, 0, 0);
     updateSliderText(0, 0, 0);
     
-    lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false }); 
-    renderScript();
-    log("⏹️ 手操釋放：發送全滅(0,0,0)訊號。");
+    // 💡 放開時，立刻寫入「全滅點」
+    if (!myAudio.paused && !myAudio.ended) {
+        lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false }); 
+        renderScript();
+        log(`⏹️ 手操釋放：成功記錄全滅 (0,0,0) 於 ${currentTime.toFixed(2)}s`);
+    }
 }
 
 captureBtn.addEventListener('mousedown', handlePressStart);
@@ -489,7 +499,6 @@ captureBtn.addEventListener('mouseleave', handlePressEnd);
 captureBtn.addEventListener('touchstart', handlePressStart);
 captureBtn.addEventListener('touchend', handlePressEnd);
 
-// 💡 智慧鎖定邏輯優化
 function handleLockClick(e) {
     e.preventDefault();
     const currentTime = myAudio.currentTime;
@@ -499,31 +508,32 @@ function handleLockClick(e) {
         lockBtn.innerText = "🔒 已鎖定當前色";
         lockBtn.classList.add('active');
         
-        // 💡 如果大按鈕正按著，抓取極限全亮值；否則才抓推桿計算值
         const target = isRightBtnActive ? getMaximizedRGB(colorPicker.color.rgb) : getCalculatedRGB(colorPicker.color.rgb);
         
         executeBluetoothSend(target.r, target.g, target.b);
         updateSliderText(target.r, target.g, target.b);
         
-        // 順便把推桿強制拉到對應的亮度位置，避免視覺混淆
         const maxVal = Math.max(target.r, target.g, target.b);
         if (maxVal > 0) {
             brightnessSlider.value = Math.round((maxVal / 255) * 100);
         }
 
-        lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
-        lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
-        renderScript();
+        if (!myAudio.paused && !myAudio.ended) {
+            lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
+            lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
+            renderScript();
+        }
         log(`🔒 鎖定成功！抓取數值為 RGB(${target.r}, ${target.g}, ${target.b})`);
     } else {
         cancelLockState();
-        // 如果此時大按鈕沒按著，才需要送全滅
         if (!isRightBtnActive) {
             executeBluetoothSend(0, 0, 0);
             updateSliderText(0, 0, 0);
-            lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false });
+            if (!myAudio.paused && !myAudio.ended) {
+                lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false });
+                renderScript();
+            }
             lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
-            renderScript();
         }
     }
 }
