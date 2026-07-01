@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>扯鈴 RGB 燈光編排工作站 V.7.0</title>
+    <title>扯鈴 RGB 燈光編排工作站 V7.1</title>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     <style>
         body { font-family: 'PingFang TC', sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; user-select: none; }
@@ -70,7 +70,7 @@
 <body>
 
 <div class="container">
-    <h2>扯鈴 RGB 燈光編排工作站 V7.0 🎬</h2>
+    <h2>扯鈴 RGB 燈光編排工作站 V7.1 🎬</h2>
     <div id="status" class="status">狀態：尚未連接 ESP32</div>
     <div style="text-align: center;"><button id="connectBtn">🔗 連接 ESP32 藍牙</button></div>
     
@@ -386,7 +386,6 @@ window.loadFromSlot = (slotNumber) => {
     }
 };
 
-// 💡 升級版：支援同時內插色彩與亮度的漸層產生器
 generateFxBtn.addEventListener('click', () => {
     const startT = parseFloat(fxStartInput.value);
     const endT = parseFloat(fxEndInput.value);
@@ -401,20 +400,14 @@ generateFxBtn.addEventListener('click', () => {
     }
     
     let generatedPoints = 0;
-    const step = 0.1; // 每 0.1 秒產生一個數據點
+    const step = 0.1;
     
     for (let t = startT; t <= endT; t += step) {
         const progress = (t - startT) / (endT - startT);
-        
-        // 1. 計算該時間點的基礎色彩組合 (色相內插)
         const rBase = rgbStart.r + (rgbEnd.r - rgbStart.r) * progress;
         const gBase = rgbStart.g + (rgbEnd.g - rgbStart.g) * progress;
         const bBase = rgbStart.b + (rgbEnd.b - rgbStart.b) * progress;
-        
-        // 2. 計算該時間點的當前亮度比例 (亮度內插)
         const currentFactor = bStart + (bEnd - bStart) * progress;
-        
-        // 3. 結合基礎色彩與亮度，算出最終要輸出的實際 RGB 值
         const r = Math.round(rBase * currentFactor);
         const g = Math.round(gBase * currentFactor);
         const b = Math.round(bBase * currentFactor);
@@ -422,9 +415,8 @@ generateFxBtn.addEventListener('click', () => {
         lightScript.push({ time: t, r: r, g: g, b: b, executed: false });
         generatedPoints++;
     }
-    
     renderScript();
-    log(`✨ 全彩+亮度漸層生成成功！[${colorStartInput.value}, 亮度 ${brightStartInput.value}%] ➡️ [${colorEndInput.value}, 亮度 ${brightEndInput.value}%]，共生成 ${generatedPoints} 點`);
+    log(`✨ 全彩+亮度漸層生成成功！[${colorStartInput.value}] ➡️ [${colorEndInput.value}]`);
 });
 
 resetDefaultBtn.addEventListener('click', () => {
@@ -466,17 +458,20 @@ function handlePressStart(e) {
     executeBluetoothSend(target.r, target.g, target.b);
     updateSliderText(target.r, target.g, target.b);
 
-    lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false }); 
+    // 移除大按鈕按下時重複塞點的行為，交給放開或鎖定按鈕統一處理
     lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
-    renderScript();
-    log(`🔥 手操按下：以極限最大值全亮 RGB(${target.r}, ${target.g}, ${target.b})`);
 }
 
 function handlePressEnd(e) {
     e.preventDefault();
     if (!isRightBtnActive) return; 
     isRightBtnActive = false;
-    if (isLocked255) return;
+    
+    // 💡 關鍵修正：如果放開全亮鍵時，發現「鎖定鍵已經被按下了」，就不執行全滅！
+    if (isLocked255) {
+        log("🔒 由於鎖定鍵已啟用，放開時維持鎖定色亮度，不熄滅。");
+        return; 
+    }
     
     const currentTime = myAudio.currentTime;
     lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
@@ -494,6 +489,7 @@ captureBtn.addEventListener('mouseleave', handlePressEnd);
 captureBtn.addEventListener('touchstart', handlePressStart);
 captureBtn.addEventListener('touchend', handlePressEnd);
 
+// 💡 智慧鎖定邏輯優化
 function handleLockClick(e) {
     e.preventDefault();
     const currentTime = myAudio.currentTime;
@@ -503,26 +499,31 @@ function handleLockClick(e) {
         lockBtn.innerText = "🔒 已鎖定當前色";
         lockBtn.classList.add('active');
         
-        const target = getCalculatedRGB(colorPicker.color.rgb);
+        // 💡 如果大按鈕正按著，抓取極限全亮值；否則才抓推桿計算值
+        const target = isRightBtnActive ? getMaximizedRGB(colorPicker.color.rgb) : getCalculatedRGB(colorPicker.color.rgb);
+        
         executeBluetoothSend(target.r, target.g, target.b);
         updateSliderText(target.r, target.g, target.b);
         
-        if (!myAudio.paused && !myAudio.ended) {
-            lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
-            lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
-            renderScript();
+        // 順便把推桿強制拉到對應的亮度位置，避免視覺混淆
+        const maxVal = Math.max(target.r, target.g, target.b);
+        if (maxVal > 0) {
+            brightnessSlider.value = Math.round((maxVal / 255) * 100);
         }
-        log(`🔒 鎖定色彩成功！`);
+
+        lightScript.push({ time: currentTime, r: target.r, g: target.g, b: target.b, executed: false });
+        lastRecordR = target.r; lastRecordG = target.g; lastRecordB = target.b;
+        renderScript();
+        log(`🔒 鎖定成功！抓取數值為 RGB(${target.r}, ${target.g}, ${target.b})`);
     } else {
         cancelLockState();
+        // 如果此時大按鈕沒按著，才需要送全滅
         if (!isRightBtnActive) {
             executeBluetoothSend(0, 0, 0);
             updateSliderText(0, 0, 0);
-            if (!myAudio.paused && !myAudio.ended) {
-                lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false });
-                lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
-                renderScript();
-            }
+            lightScript.push({ time: currentTime, r: 0, g: 0, b: 0, executed: false });
+            lastRecordR = 0; lastRecordG = 0; lastRecordB = 0;
+            renderScript();
         }
     }
 }
@@ -554,10 +555,7 @@ brightnessSlider.addEventListener('input', (e) => {
     const targetB = Math.round(rgb.b * factor);
     
     updateSliderText(targetR, targetG, targetB);
-    
-    if (isLocked255 && factor < 1.0) {
-        cancelLockState();
-    }
+    if (isLocked255 && factor < 1.0) cancelLockState();
     
     executeBluetoothSend(targetR, targetG, targetB);
     
